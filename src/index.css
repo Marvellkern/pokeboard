@@ -1,0 +1,924 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink: #131c3f;
+  --color-ink-soft: #3f4a72;
+  --color-yellow: #ffd23f;
+  --color-red: #d42e0a;
+  --color-hp: #35e04a;
+  --color-special: #1d2b5e;
+  --color-rocket: #3a2a55;
+  /* Symbol fonts cover ♂/♀ (e.g. Nidoran), which Fredoka and Nunito lack. */
+  --font-display: 'Fredoka', 'Nunito', 'Segoe UI Symbol', 'Apple Symbols', 'Noto Sans Symbols 2', system-ui, sans-serif;
+  --font-sans: 'Nunito', 'Segoe UI Symbol', 'Apple Symbols', 'Noto Sans Symbols 2', system-ui, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+  --ink: #131c3f;
+  --ink-soft: #3f4a72;
+  --yellow: #ffd23f;
+  --red: #d42e0a;
+  --hp-green: #35e04a;
+  --board-seat: rgba(19, 28, 63, 0.22);
+  --dots-page: radial-gradient(rgba(255, 255, 255, 0.16) 14%, transparent 16%);
+  --dots-type: radial-gradient(rgba(255, 255, 255, 0.22) 17%, transparent 19%);
+}
+
+html,
+body {
+  min-height: 100%;
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body,
+.bg-game {
+  background-color: #1e7fe0;
+  background-image: var(--dots-page), linear-gradient(160deg, #20c4b6 0%, #1e7fe0 100%);
+  background-size:
+    22px 22px,
+    100% 100%;
+  background-attachment: fixed;
+}
+
+/* Type-colored surfaces: set background-color inline, add this for the dot pattern. */
+.dots {
+  background-image: var(--dots-type);
+  background-size: 14px 14px;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Signature outlined text. Only for 28px+ headlines. */
+.outlined {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #fff;
+  -webkit-text-stroke: 0.25em var(--ink);
+  paint-order: stroke fill;
+  text-shadow: 0 0.14em 0 var(--ink);
+  letter-spacing: 0.01em;
+  line-height: 1.15;
+}
+.outlined-inverse {
+  color: var(--ink);
+  -webkit-text-stroke-color: #fff;
+  text-shadow: 0 0.14em 0 #fff;
+}
+
+/* ── Components ──────────────────────────────────────────────────────────── */
+
+.card {
+  background: #fff;
+  border-radius: 22px;
+  box-shadow: 0 5px 0 rgba(19, 28, 63, 0.3);
+}
+.card-strong {
+  background: #fff;
+  border: 4px solid var(--ink);
+  border-radius: 20px;
+  box-shadow: 0 6px 0 var(--ink);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  min-height: 48px;
+  padding: 0 1.15em;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1.1;
+  color: var(--ink);
+  background: #fff;
+  border: 3px solid var(--ink);
+  border-radius: 16px;
+  box-shadow: 0 4px 0 var(--ink);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    transform 70ms,
+    box-shadow 70ms;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 0 0 var(--ink);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--red);
+  color: #fff;
+}
+.btn-yellow {
+  background: var(--yellow);
+  color: var(--ink);
+}
+.btn-ink {
+  background: var(--ink);
+  color: #fff;
+}
+.btn-sm {
+  min-height: 44px;
+  padding: 0 0.85em;
+  font-size: 15px;
+  border-radius: 14px;
+}
+.btn-lg {
+  min-height: 56px;
+  font-size: 21px;
+  padding: 0 1.5em;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.18em 0.7em;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.35em 1em;
+  border-radius: 999px;
+  background: var(--yellow);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  box-shadow: 0 4px 0 var(--ink);
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+/* On the blue/green page backgrounds an ink ring is hard to see. */
+.on-bg:focus-visible {
+  outline-color: var(--yellow);
+}
+
+/* ── Board (all sizes in % of board width via cqw) ───────────────────────── */
+
+.board-wrap {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+}
+.board {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  padding: 1.2cqw;
+  gap: 1cqw;
+  background: var(--board-seat);
+  border-radius: 3cqw;
+}
+
+.tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 0.4cqw solid #fff;
+  border-radius: 1.3cqw;
+  box-shadow: 0 0.5cqw 0 rgba(19, 28, 63, 0.3);
+  background-size: 1.6cqw 1.6cqw;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.tile:focus-visible {
+  outline: 0.5cqw solid var(--yellow);
+  outline-offset: 0.3cqw;
+}
+.tile-img-area {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tile-img {
+  width: 62%;
+  height: 100%;
+  object-fit: contain;
+}
+.tile-strip {
+  flex: none;
+  width: calc(100% - 0.8cqw);
+  margin-bottom: 0.4cqw;
+  padding: 0.2cqw 0.3cqw 0.25cqw;
+  background: #fff;
+  color: var(--ink);
+  border-radius: 0.8cqw;
+  text-align: center;
+  line-height: 1.05;
+}
+.tile-name {
+  display: block;
+  font-family: var(--font-sans);
+  font-weight: 800;
+  font-size: 1.2cqw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tile-fee {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.4cqw;
+}
+.tile-lv {
+  position: absolute;
+  top: 0.4cqw;
+  left: 0.4cqw;
+  padding: 0.1cqw 0.55cqw;
+  border-radius: 99px;
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.15cqw;
+  line-height: 1.25;
+}
+.tile-lv.legend {
+  background: var(--yellow);
+  color: var(--ink);
+}
+.tile-owner {
+  position: absolute;
+  top: 0.35cqw;
+  right: 0.35cqw;
+  width: 2.7cqw;
+  height: 2.7cqw;
+  border-radius: 50%;
+  border: 0.25cqw solid #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1cqw;
+  line-height: 1;
+}
+.tile-special {
+  justify-content: center;
+  gap: 0.4cqw;
+  text-align: center;
+}
+.tile-special svg {
+  width: 4.6cqw;
+  height: 4.6cqw;
+  flex: none;
+}
+.tile-label {
+  font-weight: 900;
+  font-size: 1.1cqw;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 0.4cqw;
+}
+.tile-corner {
+  justify-content: flex-start;
+  padding-top: 1.1cqw;
+}
+
+.token {
+  position: absolute;
+  z-index: 3;
+  width: 5cqw;
+  height: 5cqw;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  border: 0.5cqw solid;
+  box-shadow: 0 0.45cqw 0 rgba(19, 28, 63, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    left 110ms linear,
+    top 110ms linear;
+  pointer-events: none;
+}
+.token img {
+  width: 92%;
+  height: 92%;
+  object-fit: contain;
+}
+.token-current {
+  z-index: 4;
+  box-shadow:
+    0 0 0 0.45cqw var(--yellow),
+    0 0.6cqw 0 0.45cqw rgba(19, 28, 63, 0.45);
+}
+.token-tag {
+  position: absolute;
+  bottom: -1cqw;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 0.45cqw;
+  border-radius: 99px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1cqw;
+  line-height: 1.5;
+  border: 0.18cqw solid #fff;
+}
+
+/* Center stage */
+.stage {
+  grid-row: 2 / 8;
+  grid-column: 2 / 8;
+  min-width: 0;
+  min-height: 0;
+  padding: 6.6cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.6cqw;
+  text-align: center;
+}
+.stage-top {
+  display: flex;
+  align-items: center;
+  gap: 1.4cqw;
+}
+.stage-round {
+  font-size: 1.7cqw;
+}
+.die {
+  width: 6cqw;
+  height: 6cqw;
+  border-radius: 1.4cqw;
+  border: 0.45cqw solid var(--ink);
+  background: #fff;
+  box-shadow: 0 0.5cqw 0 var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 3.4cqw;
+  color: var(--ink);
+}
+.stage-headline {
+  font-size: 3.5cqw;
+}
+.stage-sub {
+  max-width: 100%;
+  padding: 0.5cqw 1.6cqw;
+  border-radius: 999px;
+  background: rgba(19, 28, 63, 0.8);
+  color: #fff;
+  font-size: 1.75cqw;
+  font-weight: 800;
+  line-height: 1.3;
+}
+.stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.2cqw;
+}
+.stage-actions .btn {
+  font-size: max(15px, 1.9cqw);
+  min-height: max(48px, 5.4cqw);
+  border-radius: max(14px, 1.7cqw);
+}
+.stage .big-card {
+  width: 100%;
+  max-width: 54cqw;
+}
+
+/* Big card (stage, tile details). Sizes scale with --u (1% of a reference width). */
+.big-card {
+  --u: 1cqw;
+  display: flex;
+  align-items: center;
+  gap: calc(1.4 * var(--u));
+  padding: calc(1.4 * var(--u));
+  border: calc(0.5 * var(--u)) solid #fff;
+  border-radius: calc(2.6 * var(--u));
+  box-shadow: 0 calc(0.6 * var(--u)) 0 rgba(19, 28, 63, 0.35);
+  background-size: calc(1.8 * var(--u)) calc(1.8 * var(--u));
+  text-align: left;
+  color: #fff;
+}
+.big-card-img {
+  flex: none;
+  width: calc(15 * var(--u));
+  height: calc(15 * var(--u));
+  object-fit: contain;
+  filter: drop-shadow(0 calc(0.6 * var(--u)) 0 rgba(19, 28, 63, 0.25));
+}
+.big-card-icon {
+  flex: none;
+  width: calc(12 * var(--u));
+  height: calc(12 * var(--u));
+  margin: calc(1.5 * var(--u));
+}
+.big-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(0.9 * var(--u));
+}
+.big-card .chip {
+  font-size: calc(1.45 * var(--u));
+}
+.big-card-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(1 * var(--u));
+  padding: calc(0.8 * var(--u)) calc(1.3 * var(--u));
+  border-radius: calc(1.5 * var(--u));
+  background: #fff;
+  color: var(--ink);
+}
+.big-card-box-label {
+  font-size: calc(1.5 * var(--u));
+  font-weight: 800;
+}
+.big-card-box-value {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(3.2 * var(--u));
+  line-height: 1;
+}
+.big-card-hint {
+  padding: calc(0.6 * var(--u)) calc(1.1 * var(--u));
+  border-radius: calc(1.2 * var(--u));
+  background: var(--ink);
+  color: #fff;
+  font-size: calc(1.45 * var(--u));
+  font-weight: 800;
+  line-height: 1.25;
+}
+.big-card-text {
+  font-size: calc(1.7 * var(--u));
+  font-weight: 800;
+  line-height: 1.3;
+}
+.big-card-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(2.6 * var(--u));
+  line-height: 1.1;
+}
+/* Outside the board (modals, mobile sheet) the card sizes against a fixed reference. */
+.big-card.fixed-size {
+  --u: 5.6px;
+}
+
+/* Medium boards: the stage headline drops below 28px, so it loses the outline. */
+@container (max-width: 799px) {
+  .stage-headline {
+    font-size: max(18px, 3.5cqw);
+    color: #fff;
+    -webkit-text-stroke: 0;
+    text-shadow: 0 2px 0 var(--ink);
+  }
+}
+/* Small boards (phones): tiles show render + level only. The card and buttons move
+   below the board (GameScreen measures the board for that). */
+@container (max-width: 639px) {
+  .tile-strip {
+    display: none;
+  }
+  .tile-img {
+    width: 80%;
+  }
+  .tile-lv {
+    font-size: 1.8cqw;
+    padding: 0 0.5cqw;
+  }
+  .tile-owner {
+    width: 3.8cqw;
+    height: 3.8cqw;
+    font-size: 1.7cqw;
+  }
+  .tile-label {
+    font-size: 1.55cqw;
+    letter-spacing: 0;
+  }
+  .tile-special svg {
+    width: 5.5cqw;
+    height: 5.5cqw;
+  }
+  .tile-label.long {
+    display: none;
+  }
+  .token-tag {
+    font-size: 1.7cqw;
+    bottom: -1.6cqw;
+  }
+  .stage {
+    gap: 2.4cqw;
+  }
+  .stage-round {
+    font-size: 3.2cqw;
+  }
+  .die {
+    width: 10cqw;
+    height: 10cqw;
+    font-size: 5.6cqw;
+    border-radius: 2.2cqw;
+  }
+  .stage-sub {
+    font-size: 3.4cqw;
+  }
+}
+
+/* ── Battle ──────────────────────────────────────────────────────────────── */
+
+/* Soft white disc behind each battle render, ~10% wider than the render. */
+.spotlight {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 110%;
+  height: 110%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.render-shadow {
+  filter: drop-shadow(0 10px 0 rgba(19, 28, 63, 0.25));
+}
+.mirror {
+  transform: scaleX(-1);
+}
+
+.hp-track {
+  height: 24px;
+  border-radius: 8px;
+  border: 3px solid var(--ink);
+  background: var(--ink);
+  overflow: hidden;
+}
+.hp-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 300ms ease-out;
+}
+/* In battle the bar drains after the lunge + flash. */
+.battle .hp-fill {
+  transition-delay: 300ms;
+}
+
+/* Readable white text on the gradient backgrounds. */
+.on-glass {
+  background: rgba(19, 28, 63, 0.78);
+  color: #fff;
+  border-radius: 16px;
+  padding: 0.5em 1em;
+}
+
+.move-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border: 5px solid #fff;
+  border-radius: 26px;
+  box-shadow: 0 7px 0 rgba(19, 28, 63, 0.4);
+  background-size: 16px 16px;
+  color: #fff;
+  cursor: pointer;
+  text-align: center;
+  font: inherit;
+  transition:
+    transform 70ms,
+    box-shadow 70ms;
+}
+.move-card:active:not(:disabled) {
+  transform: translateY(6px);
+  box-shadow: 0 1px 0 rgba(19, 28, 63, 0.4);
+}
+.move-card:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.move-card:focus-visible {
+  outline: 4px solid var(--yellow);
+  outline-offset: 3px;
+}
+.move-name {
+  font-size: 30px;
+  white-space: nowrap;
+}
+.move-stat {
+  flex: 1;
+  border-radius: 12px;
+  background: rgba(19, 28, 63, 0.82);
+  padding: 6px 8px;
+  line-height: 1.15;
+}
+.move-tag {
+  align-self: center;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+@media (max-width: 639px) {
+  .move-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-width: 4px;
+    border-radius: 20px;
+    gap: 8px;
+  }
+  .move-name {
+    font-size: 28px;
+  }
+  .move-tag {
+    font-size: 12px;
+    padding: 2px 8px;
+    line-height: 1.2;
+  }
+  .hp-track {
+    height: 16px;
+    border-width: 2px;
+  }
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────────── */
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0);
+  }
+  25% {
+    transform: translate(-4px, 2px) rotate(-14deg);
+  }
+  50% {
+    transform: translate(4px, -2px) rotate(12deg);
+  }
+  75% {
+    transform: translate(-2px, 2px) rotate(-8deg);
+  }
+}
+.shake {
+  animation: shake 400ms ease-in-out;
+}
+
+@keyframes flash-white {
+  0%,
+  100% {
+    filter: drop-shadow(0 10px 0 rgba(19, 28, 63, 0.25));
+  }
+  50% {
+    filter: brightness(0) invert(1) drop-shadow(0 10px 0 rgba(19, 28, 63, 0.25));
+  }
+}
+.hit-flash {
+  animation: flash-white 150ms linear 150ms 1;
+}
+
+@keyframes lunge-up {
+  50% {
+    translate: 24px -24px;
+  }
+}
+@keyframes lunge-down {
+  50% {
+    translate: -24px 24px;
+  }
+}
+.lunge-up {
+  animation: lunge-up 150ms ease-out;
+}
+.lunge-down {
+  animation: lunge-down 150ms ease-out;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.pop {
+  animation: pop 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── Ball throw (stage) ──────────────────────────────────────────────────── */
+
+.btn-text {
+  border-color: transparent;
+  box-shadow: none;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.stage .btn-text {
+  color: #fff;
+}
+.stage-footnote {
+  font-size: max(12px, 1.4cqw);
+  font-weight: 800;
+  color: #fff;
+  background: rgba(19, 28, 63, 0.7);
+  padding: 0.2em 0.9em;
+  border-radius: 999px;
+}
+
+.throw-media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: none;
+}
+.throw-mon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.throw-ball {
+  position: absolute;
+  left: 29%;
+  top: 29%;
+}
+@keyframes throw-arc {
+  0% {
+    transform: translate(-160%, 140%) rotate(-200deg) scale(0.7);
+  }
+  55% {
+    transform: translate(-60%, -90%) rotate(-60deg) scale(0.9);
+  }
+  100% {
+    transform: translate(0, 0) rotate(0) scale(1);
+  }
+}
+.throw-ball.arc {
+  animation: throw-arc var(--step-ms) ease-out both;
+}
+@keyframes throw-shrink {
+  0%,
+  45% {
+    transform: scale(1);
+    opacity: 1;
+    filter: none;
+  }
+  100% {
+    transform: scale(0.05);
+    opacity: 0;
+    filter: brightness(0) invert(1);
+  }
+}
+.throw-mon.shrink {
+  animation: throw-shrink var(--step-ms) ease-in both;
+}
+@keyframes throw-rock {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: rotate(-22deg);
+  }
+  65% {
+    transform: rotate(16deg);
+  }
+}
+.throw-ball.rock {
+  transform-origin: 50% 90%;
+  animation: throw-rock var(--step-ms) ease-in-out both;
+}
+@keyframes throw-click {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(0.88);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.throw-ball.click {
+  animation: throw-click calc(var(--step-ms) * 0.5) ease-out both;
+}
+@keyframes throw-pop {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
+.throw-ball.popopen {
+  animation: throw-pop var(--step-ms) ease-out both;
+}
+@keyframes throw-reappear {
+  0% {
+    transform: scale(0.05);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.throw-mon.reappear {
+  animation: throw-reappear var(--step-ms) ease-out both;
+}
+.throw-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.throw-burst span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  color: var(--yellow);
+  font-size: calc(2.4 * var(--u));
+  -webkit-text-stroke: 1px var(--ink);
+  animation: throw-star var(--step-ms) ease-out both;
+}
+@keyframes throw-star {
+  0% {
+    transform: translate(-50%, -50%) rotate(calc(var(--k) * 60deg)) translateY(0) scale(0.3);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(calc(var(--k) * 60deg)) translateY(calc(-6 * var(--u))) scale(1);
+    opacity: 0;
+  }
+}
+
+/* Ball shop */
+.ball-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px dashed var(--ink-soft);
+}
+.ball-slot.filled {
+  border-style: solid;
+  border-color: var(--ink);
+  background: #fff;
+}
