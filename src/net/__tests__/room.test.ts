@@ -195,7 +195,14 @@ describe('starting and syncing the game', () => {
       expect(await submitAction(s.host, s.code, { ...chooseAction(state), by: actorOf(state) })).toBe('applied');
       r = await room(s.host, s.code);
     }
-    expect(parseState(r.game!.stateJson)!.phase).toBe('gameOver');
+    const final = parseState(r.game!.stateJson)!;
+    expect(final.phase).toBe('gameOver');
+    // The event log travels packed inside the authoritative state and arrives whole on every device.
+    expect(r.game!.stateJson).toContain('"packedEvents"');
+    expect(final.events[0].type).toBe('start');
+    expect(final.events.at(-1)!.type).toBe('game_over');
+    expect(final.events.at(-1)!.cash).toEqual(final.players.map((p) => p.cash));
+    expect(final.events.map((e) => e.id)).toEqual(final.events.map((_, k) => k + 1));
   });
 });
 

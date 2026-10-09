@@ -20,6 +20,13 @@
   --yellow: #ffd23f;
   --red: #d42e0a;
   --hp-green: #35e04a;
+  /* Game log / recap (white text and icons sit on these). */
+  --gain: #1e8a3c;
+  --event-move: #3b6fe0;
+  --event-card: #7a5bd6;
+  --event-money: #b07a0c;
+  --event-level: #d4621f;
+  --event-trade: #1f8b9c;
   --board-seat: rgba(19, 28, 63, 0.22);
   --dots-page: radial-gradient(rgba(255, 255, 255, 0.16) 14%, transparent 16%);
   --dots-type: radial-gradient(rgba(255, 255, 255, 0.22) 17%, transparent 19%);
@@ -921,4 +928,58 @@ body,
   border-style: solid;
   border-color: var(--ink);
   background: #fff;
+}
+
+/* ── Recap ───────────────────────────────────────────────────────────────── */
+
+/* Chart lines draw in left to right once (pathLength = 1). At rest they're fully drawn. */
+.chart-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: chart-draw 1s ease-out both;
+}
+@keyframes chart-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+/* Winner banner: a quick bounce and a short confetti burst (under 2s; off with reduced motion). */
+.recap-bounce {
+  animation: recap-bounce 700ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+@keyframes recap-bounce {
+  from {
+    transform: scale(0.6) translateY(12px);
+    opacity: 0;
+  }
+}
+.confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.confetti i {
+  position: absolute;
+  top: -12px;
+  width: 9px;
+  height: 14px;
+  border: 2px solid var(--ink);
+  border-radius: 3px;
+  opacity: 0;
+  animation: confetti-fall 1.7s ease-in both;
+}
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(260px) rotate(540deg);
+  }
 }

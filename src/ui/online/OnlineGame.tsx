@@ -94,11 +94,16 @@ export function OnlineGame({ room, uid }: { room: Room; uid: string }) {
   const tradeKey = shown?.phase === 'trade' ? `${shown.turnSeq}-${shown.logSeq}` : null;
   const tradeSeen = useRef<{ key: string; at: number } | null>(null);
   if (tradeKey && tradeSeen.current?.key !== tradeKey) tradeSeen.current = { key: tradeKey, at: Date.now() };
-  const tradeDeadline = tradeKey ? tradeSeen.current!.at + CONFIG.trade.responseSeconds * 1000 : undefined;
+  const answerDeadline = tradeKey ? tradeSeen.current!.at + CONFIG.trade.responseSeconds * 1000 : undefined;
+  // Opening the counter builder gives counterSeconds to send it (from when this device saw that).
+  const counterWriting = !!tradeKey && room.counterDraft?.key === tradeKey;
+  const draftSeen = useRef<{ key: string; at: number } | null>(null);
+  if (counterWriting && draftSeen.current?.key !== tradeKey) draftSeen.current = { key: tradeKey!, at: Date.now() };
+  const tradeDeadline = counterWriting ? draftSeen.current!.at + CONFIG.trade.counterSeconds * 1000 : answerDeadline;
   const autoDeclined = useRef<string | null>(null);
   useEffect(() => {
     if (!tradeKey || !runsBots || !shown?.pendingTrade || autoDeclined.current === tradeKey) return;
-    const to = shown.pendingTrade.to;
+    const to = shown.pendingTrade.answerer;
     const seat = room.seats[to];
     if (!seat || seat.kind !== 'human' || seatIsBot(room, to)) return;
     if (isOnline(room, seat.playerId) && now < tradeDeadline!) return;
@@ -165,8 +170,11 @@ export function OnlineGame({ room, uid }: { room: Room; uid: string }) {
     ],
     playAgain: isHost ? { label: 'Play again', onClick: () => void store.rematch() } : null,
     playAgainNote: isHost ? undefined : 'Waiting for the host to start another game…',
+    backToMenu: { label: 'Back to menu', onClick: () => store.exit() },
     onBusyChange,
     tradeDeadline,
+    counterWriting,
+    onCounterStart: () => tradeKey && mySeat >= 0 && void store.counterDraft(tradeKey, mySeat),
   };
   return <GameScreen key={`${room.code}-${shown.seed}`} session={session} />;
 }

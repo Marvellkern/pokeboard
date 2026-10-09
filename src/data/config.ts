@@ -134,8 +134,12 @@ export const CONFIG = {
   trade: {
     /** Offers a player may make per turn (accepted or not). */
     offersPerTurn: 1,
+    /** Most proposals in one negotiation: the offer plus counters (the last answer is accept or decline). */
+    maxProposals: 3,
     /** Online: an offer nobody answers in this many seconds (or whose recipient is offline) is declined. */
     responseSeconds: 30,
+    /** Online: once the answerer opens the counter builder, they have this long to send it. */
+    counterSeconds: 60,
     /** A declined offer is remembered this many rounds; bots don't repeat it to the same player meanwhile. */
     declineMemoryRounds: 3,
   },
@@ -208,12 +212,27 @@ export const CONFIG = {
       cashBuyMultiplier: 2,
       /** ...and only if the bot keeps at least this much cash. */
       cashBuyReserve: 300,
+      /**
+       * Counter a first offer that falls short by at most this share of what the bot needs (asking for the gap
+       * in cash); decline anything further off. Bots never counter a counter.
+       */
+      counterGapShare: 0.4,
     },
   },
 
   // ── Misc ──
   /** How many log entries are kept. */
   logSize: 50,
+
+  // ── Post-game recap (key moments are only shown when the data supports them) ──
+  recap: {
+    /** Comeback: the winner was behind the leader by at least this share of starting money. */
+    comebackShare: 0.25,
+    /** Luckiest catch: a carried-ball catch at this chance or lower. */
+    luckyCatchMaxChance: 0.35,
+    /** Battle star: at least this many battles won (and more than anyone else). */
+    minBattleWins: 3,
+  },
 
   // ── UI timing (ms) ──
   ui: {

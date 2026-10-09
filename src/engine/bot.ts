@@ -8,6 +8,9 @@ import {
   ballsCarried,
   alivePlayers,
   canTrade,
+  counterCheck,
+  proposalNumber,
+  tradeSidesFor,
   catchChance,
   challengeCosts,
   isLegendary,
@@ -161,6 +164,33 @@ export function botAccepts(s: GameState, t: Trade, pid: PlayerId): boolean {
   return v.received >= v.given * T().acceptRatio;
 }
 
+/**
+ * The bot's answer to the pending proposal. needed = value given × acceptRatio; gap = needed − value received.
+ * Accept when gap ≤ 0. On the opening offer only (bots never counter a counter), a near miss
+ * (gap ≤ counterGapShare × needed) gets a counter with the same creatures and the gap in cash, rounded up
+ * to ₽10: first by paying less, then by asking for more, if the other player can afford it. Otherwise decline.
+ */
+export function botAnswer(s: GameState): Action {
+  const t = s.pendingTrade!;
+  const me = t.answerer ?? t.to;
+  const v = tradeValue(s, t, me);
+  const needed = v.given * T().acceptRatio;
+  const gap = needed - v.received;
+  if (gap <= 0) return { type: 'RESPOND_TRADE', accept: true };
+  if (proposalNumber(t) === 1 && gap <= T().counterGapShare * needed) {
+    const mine = tradeSidesFor(t, me);
+    const other = me === t.from ? t.to : t.from;
+    const extra = Math.ceil(gap / 10) * 10;
+    const cut = Math.min(mine.give.money, extra);
+    const counter = {
+      give: { tiles: mine.give.tiles, money: mine.give.money - cut },
+      receive: { tiles: mine.receive.tiles, money: mine.receive.money + extra - cut },
+    };
+    if (counter.receive.money <= s.players[other].cash && counterCheck(s, counter).ok) return { type: 'COUNTER_TRADE', ...counter };
+  }
+  return { type: 'RESPOND_TRADE', accept: false };
+}
+
 /** The same offer was declined by the same player recently. */
 function recentlyDeclined(s: GameState, from: PlayerId, offer: TradeOffer): boolean {
   return s.tradeDeclines.some(
@@ -228,10 +258,8 @@ export function chooseAction(s: GameState): Action {
     case 'roll':
       return wantedTrade(s) ?? wantedBall(s) ?? wantedLevelUp(s, pid) ?? { type: 'ROLL' };
 
-    case 'trade': {
-      const t = s.pendingTrade!;
-      return { type: 'RESPOND_TRADE', accept: botAccepts(s, t, t.to) };
-    }
+    case 'trade':
+      return botAnswer(s);
 
     case 'endTurn':
       return wantedLevelUp(s, pid) ?? { type: 'END_TURN' };

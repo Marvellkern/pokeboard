@@ -34,9 +34,24 @@ import {
   tileType,
   tradeStillValid,
 } from './selectors';
-import type { Action, Battle, BattleKind, Continuation, FighterRef, GameSetup, GameState, PlayerId, TradeResult, TradeSide } from './types';
+import type {
+  Action,
+  Battle,
+  BattleKind,
+  Continuation,
+  EventMeta,
+  FighterRef,
+  GameEventType,
+  GameSetup,
+  GameState,
+  PlayerId,
+  TradeResult,
+  TradeSide,
+} from './types';
 
-const money = (n: number) => `${CURRENCY}${n}`;
+type PayReason = NonNullable<EventMeta['reason']>;
+
+const money = (n: number) => `${CURRENCY}${n.toLocaleString('en-US')}`;
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -91,9 +106,11 @@ export function createGame(setup: GameSetup, seed: number): GameState {
     tradeOffers: 0,
     lastTrade: null,
     tradeDeclines: [],
+    events: [],
   };
   s.deck = shuffle(s, CONFIG.cards.map((_, i) => i));
   log(s, `Game started. Round 1 of ${s.roundLimit}. ${s.players[0].name} goes first.`);
+  event(s, 'start', null, `Game started: ${s.players.length} players, ${s.roundLimit} rounds.`);
   return s;
 }
 
@@ -117,6 +134,8 @@ export function reduce(state: GameState, action: Action): GameState {
       s.lastRoll = dice;
       s.rollSeq += 1;
       log(s, `${p.name} rolled ${dice.join(' + ')} = ${total}.`);
+      const dest = (p.position + total) % BOARD_SIZE;
+      event(s, 'roll', s.current, `${p.name} rolled ${total} and landed on ${tileLabel(s, dest)}.`, { dice, tile: dest });
       movePlayer(s, s.current, total, true);
       resolveTile(s);
       break;
@@ -126,7 +145,7 @@ export function reduce(state: GameState, action: Action): GameState {
       p.cash -= CONFIG.balls.cost[action.ball];
       p.balls[action.ball] += 1;
       s.shopBuys += 1;
-      log(s, `${p.name} bought a ${BALLS[action.ball].name} for ${money(CONFIG.balls.cost[action.ball])}.`);
+      note(s, 'ball_purchase', s.current, `${p.name} bought a ${BALLS[action.ball].name} for ${money(CONFIG.balls.cost[action.ball])}.`, { ball: action.ball });
       break;
     }
 
@@ -146,14 +165,14 @@ export function reduce(state: GameState, action: Action): GameState {
         const i = s.pendingTile!;
         const owner = s.tiles[i].owner!;
         s.pendingTile = null;
-        charge(s, s.current, owner, tileFee(s, i), { k: 'endTurn' });
+        charge(s, s.current, owner, tileFee(s, i), { k: 'endTurn' }, 'fee');
       } else if (s.phase === 'ambushChoice') {
-        charge(s, s.current, null, CONFIG.ambushFee, { k: 'endTurn' });
+        charge(s, s.current, null, CONFIG.ambushFee, { k: 'endTurn' }, 'ambush');
       } else if (s.phase === 'hideout') {
         p.inHideout = false;
         p.hideoutFails = 0;
         log(s, `${p.name} paid to leave the ${WORDS.hideoutShort}.`);
-        charge(s, s.current, null, CONFIG.hideout.fee, { k: 'roll' });
+        charge(s, s.current, null, CONFIG.hideout.fee, { k: 'roll' }, 'hideout');
       }
       break;
     }
@@ -193,10 +212,10 @@ export function reduce(state: GameState, action: Action): GameState {
       const name = tileForm(s, action.tile).name;
       debtor.cash += value;
       s.tiles[action.tile] = { owner: null, level: CONFIG.startLevel };
-      log(s, `${debtor.name} released ${name} for ${money(value)}.`);
+      note(s, 'release', d.debtor, `${debtor.name} released ${name} for ${money(value)}.`, { tile: action.tile });
       if (debtor.cash >= d.amount || ownedTiles(s, d.debtor).length === 0) {
         s.debt = null;
-        charge(s, d.debtor, d.creditor, d.amount, d.then);
+        charge(s, d.debtor, d.creditor, d.amount, d.then, d.reason ?? 'fee');
       }
       break;
     }
@@ -208,7 +227,7 @@ export function reduce(state: GameState, action: Action): GameState {
     case 'PROPOSE_TRADE': {
       const offer = normalizeOffer(action);
       s.tradeOffers += 1;
-      s.pendingTrade = { ...offer, from: s.current, returnPhase: s.phase };
+      s.pendingTrade = { ...offer, from: s.current, returnPhase: s.phase, answerer: offer.to, history: [] };
       s.phase = 'trade';
       log(s, `${p.name} offered ${s.players[offer.to].name} a trade.`);
       break;
@@ -217,6 +236,18 @@ export function reduce(state: GameState, action: Action): GameState {
     case 'RESPOND_TRADE':
       respondTrade(s, action.accept);
       break;
+
+    case 'COUNTER_TRADE': {
+      const t = s.pendingTrade!;
+      const me = t.answerer;
+      const other = me === t.from ? t.to : t.from;
+      // Stored from the turn player's side, like every proposal.
+      const mine = normalizeOffer({ to: other, give: action.give, receive: action.receive });
+      const next = me === t.from ? { give: mine.give, receive: mine.receive } : { give: mine.receive, receive: mine.give };
+      s.pendingTrade = { ...t, ...next, answerer: other, history: [...t.history, { to: t.to, give: t.give, receive: t.receive }] };
+      note(s, 'trade_counter', me, `${s.players[me].name} countered ${s.players[other].name}'s offer.`, { with: other });
+      break;
+    }
   }
   return s;
 }
@@ -226,7 +257,7 @@ export function reduce(state: GameState, action: Action): GameState {
 /** Copy everything the reducer may mutate (much faster than structuredClone). Log entries are immutable. */
 function cloneState(s: GameState): GameState {
   const b = s.battle;
-  return {
+  const d: GameState = {
     ...s,
     players: s.players.map((p) => ({ ...p, balls: { ...p.balls } })),
     tiles: s.tiles.map((t) => ({ ...t })),
@@ -242,6 +273,8 @@ function cloneState(s: GameState): GameState {
       lastHit: b.lastHit && { ...b.lastHit },
     },
   };
+  sharedEvents.add(d);
+  return d;
 }
 
 /** Answers the pending offer and returns to the phase it was made in. */
@@ -251,28 +284,49 @@ function respondTrade(s: GameState, accept: boolean): void {
   s.phase = t.returnPhase;
   const from = s.players[t.from];
   const to = s.players[t.to];
+  const answerer = t.answerer ?? t.to;
+  const ans = s.players[answerer];
+  const proposals = (t.history?.length ?? 0) + 1;
+  const what = proposals > 1 ? ' the counter' : '';
   let outcome: TradeResult['outcome'];
   if (!accept) {
     outcome = 'declined';
-    log(s, `${to.name} declined.`);
+    log(s, `${ans.name} declined${what}.`);
+    const otherName = s.players[answerer === t.from ? t.to : t.from].name;
+    event(s, 'trade_declined', answerer, `${ans.name} declined ${otherName}'s ${proposals > 1 ? 'counter-offer' : 'trade offer'}.`, { with: answerer === t.from ? t.to : t.from });
   } else if (!tradeStillValid(s, t)) {
     outcome = 'cancelled';
-    log(s, `The trade between ${from.name} and ${to.name} was cancelled: the offer no longer adds up.`);
+    note(s, 'trade_declined', t.from, `The trade between ${from.name} and ${to.name} was cancelled: the offer no longer adds up.`, { with: t.to });
   } else {
     outcome = 'accepted';
     // Names as they arrive (level 1, first form).
     const side = (x: TradeSide) =>
       [...x.tiles.map((i) => formAtLevel(s, i, CONFIG.startLevel).name), ...(x.money > 0 ? [money(x.money)] : [])].join(' + ');
-    log(s, `${to.name} accepted: ${from.name} gets ${side(t.receive)}, ${to.name} gets ${side(t.give)}.`);
-    for (const d of applyTrade(s, t)) {
+    log(s, `${ans.name} accepted${what}: ${from.name} gets ${side(t.receive)}, ${to.name} gets ${side(t.give)}.`);
+    const drops = applyTrade(s, t);
+    for (const d of drops) {
       log(s, `${s.players[d.owner].name}'s ${tileForm(s, d.tile).name} lost its pair and dropped to Lv ${d.toLevel}.`);
     }
+    const dropText = drops.map((d) => ` ${s.players[d.owner].name}'s ${tileForm(s, d.tile).name} dropped to Lv ${d.toLevel}.`).join('');
+    event(s, 'trade', t.from, `${from.name} and ${to.name} traded: ${from.name} got ${side(t.receive)}, ${to.name} got ${side(t.give)}.${dropText}`, { with: t.to });
   }
-  const { returnPhase: _r, ...offer } = t;
-  const result: TradeResult = { ...offer, seq: (s.lastTrade?.seq ?? 0) + 1, outcome, round: s.round };
+  const result: TradeResult = {
+    from: t.from,
+    to: t.to,
+    give: t.give,
+    receive: t.receive,
+    seq: (s.lastTrade?.seq ?? 0) + 1,
+    outcome,
+    round: s.round,
+    proposals,
+    answeredBy: answerer,
+  };
   s.lastTrade = result;
+  // A negotiation that ends in a decline at any step counts as the opening offer being declined.
+  const opening = t.history?.[0] ?? t;
+  const declined: TradeResult = { ...result, to: opening.to, give: opening.give, receive: opening.receive };
   const keep = CONFIG.trade.declineMemoryRounds;
-  s.tradeDeclines = [...s.tradeDeclines.filter((d) => s.round - d.round < keep), ...(outcome === 'declined' ? [result] : [])];
+  s.tradeDeclines = [...s.tradeDeclines.filter((d) => s.round - d.round < keep), ...(outcome === 'declined' ? [declined] : [])];
 }
 
 function cloneContinuation(c: Continuation): Continuation {
@@ -285,6 +339,34 @@ function log(s: GameState, text: string): void {
   if (s.log.length > CONFIG.logSize) s.log.splice(0, s.log.length - CONFIG.logSize);
 }
 
+/** Drafts whose `events` array is still shared with the state they were cloned from (copied on first append). */
+const sharedEvents = new WeakSet<GameState>();
+
+/** Appends a structured event with everyone's cash and net worth right after it. */
+function event(s: GameState, type: GameEventType, player: PlayerId | null, text: string, meta?: EventMeta): void {
+  if (sharedEvents.has(s)) {
+    s.events = s.events.slice();
+    sharedEvents.delete(s);
+  }
+  s.events.push({
+    id: (s.events[s.events.length - 1]?.id ?? 0) + 1,
+    turn: s.turnSeq + 1,
+    round: s.round,
+    player,
+    type,
+    text,
+    cash: s.players.map((pl) => pl.cash),
+    worth: s.players.map((_, i) => netWorth(s, i)),
+    ...(meta ? { meta } : {}),
+  });
+}
+
+/** A log line that is also an event, with the same text. */
+function note(s: GameState, type: GameEventType, player: PlayerId | null, text: string, meta?: EventMeta): void {
+  log(s, text);
+  event(s, type, player, text, meta);
+}
+
 function tileLabel(s: GameState, i: number): string {
   return isProperty(s, i) ? tileForm(s, i).name : s.board[i].name;
 }
@@ -294,7 +376,7 @@ function movePlayer(s: GameState, pid: PlayerId, steps: number, goMoney: boolean
   const raw = p.position + steps;
   if (steps > 0 && goMoney && raw >= BOARD_SIZE) {
     p.cash += CONFIG.goPayout;
-    log(s, `${p.name} passed ${s.board[GO_TILE].name} and collected ${money(CONFIG.goPayout)}.`);
+    note(s, 'money_gain', pid, `${p.name} passed ${s.board[GO_TILE].name} and collected ${money(CONFIG.goPayout)}.`);
   }
   p.position = ((raw % BOARD_SIZE) + BOARD_SIZE) % BOARD_SIZE;
 }
@@ -304,7 +386,7 @@ function sendToHideout(s: GameState, pid: PlayerId): void {
   p.position = HIDEOUT_TILE;
   p.inHideout = true;
   p.hideoutFails = 0;
-  log(s, `${p.name} was taken to the ${WORDS.hideout}!`);
+  note(s, 'move', pid, `${p.name} was taken to the ${WORDS.hideout}!`, { tile: HIDEOUT_TILE });
 }
 
 function resolveTile(s: GameState): void {
@@ -336,13 +418,13 @@ function resolveTile(s: GameState): void {
       }
       s.pendingCard = s.deck[s.deckPos];
       s.deckPos += 1;
-      log(s, `${p.name} drew a card: "${CARD_TEXT[s.pendingCard]}"`);
+      note(s, 'card', s.current, `${p.name} drew a card: "${CARD_TEXT[s.pendingCard]}"`);
       s.phase = 'card';
       return;
     }
     case 'bonus':
       p.cash += CONFIG.bonusTilePayout;
-      log(s, `${p.name} visited the ${def.name} and collected ${money(CONFIG.bonusTilePayout)}.`);
+      note(s, 'money_gain', s.current, `${p.name} visited the ${def.name} and collected ${money(CONFIG.bonusTilePayout)}.`);
       s.phase = 'endTurn';
       return;
     case 'ambush':
@@ -413,38 +495,40 @@ function settleBattle(s: GameState): void {
   const def = b.sides[0];
   const ownerName = def.owner !== null ? `'s ${def.name}` : '';
   const vs = def.owner !== null ? `${s.players[def.owner].name}${ownerName}` : def.name;
+  const meta: EventMeta = { battle: b.kind, opponent: def.owner, level: att.level, ...(b.tile !== null ? { tile: b.tile } : {}) };
+  const result = (text: string) => note(s, won ? 'battle_won' : 'battle_lost', pid, text, meta);
 
   if (b.kind === 'fee') {
     if (won) {
-      log(s, `Battle: ${p.name}'s ${att.name} beat ${vs}. No fee.`);
+      result(`Battle: ${p.name}'s ${att.name} beat ${vs}. No fee.`);
       s.phase = 'endTurn';
     } else {
-      log(s, `Battle: ${p.name}'s ${att.name} lost to ${vs}.`);
-      charge(s, pid, b.creditor, b.stake, { k: 'endTurn' });
+      result(`Battle: ${p.name}'s ${att.name} lost to ${vs}.`);
+      charge(s, pid, b.creditor, b.stake, { k: 'endTurn' }, 'battle');
     }
   } else if (b.kind === 'ambush') {
     if (won) {
-      log(s, `${p.name}'s ${att.name} fought off the ${WORDS.grunt}.`);
+      result(`${p.name}'s ${att.name} fought off the ${WORDS.grunt}.`);
       s.phase = 'endTurn';
     } else {
-      log(s, `${p.name}'s ${att.name} lost to the ${WORDS.grunt}.`);
-      charge(s, pid, null, b.stake, { k: 'endTurn' });
+      result(`${p.name}'s ${att.name} lost to the ${WORDS.grunt}.`);
+      charge(s, pid, null, b.stake, { k: 'endTurn' }, 'ambush');
     }
   } else {
     if (won) {
       p.inHideout = false;
       p.hideoutFails = 0;
-      log(s, `${p.name} beat the ${WORDS.guard} and escaped!`);
+      result(`${p.name} beat the ${WORDS.guard} and escaped!`);
       s.phase = 'roll';
     } else {
       p.hideoutFails += 1;
       if (p.hideoutFails >= CONFIG.hideout.maxFailedTurns) {
         p.inHideout = false;
         p.hideoutFails = 0;
-        log(s, `${p.name} lost to the ${WORDS.guard} again and paid to get out.`);
-        charge(s, pid, null, CONFIG.hideout.fee, { k: 'roll' });
+        result(`${p.name} lost to the ${WORDS.guard} again and paid to get out.`);
+        charge(s, pid, null, CONFIG.hideout.fee, { k: 'roll' }, 'hideout');
       } else {
-        log(s, `${p.name} lost to the ${WORDS.guard}. Stuck in the ${WORDS.hideoutShort} (${p.hideoutFails}/${CONFIG.hideout.maxFailedTurns}).`);
+        result(`${p.name} lost to the ${WORDS.guard}. Stuck in the ${WORDS.hideoutShort} (${p.hideoutFails}/${CONFIG.hideout.maxFailedTurns}).`);
         s.phase = 'endTurn';
       }
     }
@@ -452,19 +536,19 @@ function settleBattle(s: GameState): void {
 }
 
 /** Debtor pays creditor (null = bank). Opens liquidation or bankrupts if short. */
-function charge(s: GameState, debtor: PlayerId, creditor: PlayerId | null, amount: number, then: Continuation): void {
+function charge(s: GameState, debtor: PlayerId, creditor: PlayerId | null, amount: number, then: Continuation, reason: PayReason): void {
   const p = s.players[debtor];
   const to = creditor === null ? 'the bank' : s.players[creditor].name;
   if (p.cash >= amount) {
     p.cash -= amount;
     if (creditor !== null) s.players[creditor].cash += amount;
-    log(s, `${p.name} paid ${money(amount)} to ${to}.`);
+    note(s, 'payment', debtor, `${p.name} paid ${money(amount)} to ${to}.`, { to: creditor, reason });
     continueWith(s, then);
     return;
   }
   if (ownedTiles(s, debtor).length > 0) {
     log(s, `${p.name} owes ${money(amount)} but only has ${money(p.cash)}. Must release ${WORDS.creatures}.`);
-    s.debt = { debtor, creditor, amount, then };
+    s.debt = { debtor, creditor, amount, then, reason };
     s.phase = 'debt';
     return;
   }
@@ -476,7 +560,7 @@ function charge(s: GameState, debtor: PlayerId, creditor: PlayerId | null, amoun
   p.balls = { poke: 0, great: 0, ultra: 0 }; // a bankrupt player's balls are discarded
   p.inHideout = false;
   s.bankruptOrder.push(debtor);
-  log(s, `${p.name} couldn't pay ${money(amount)}, gave ${to} their last ${money(paid)}, and is bankrupt!`);
+  note(s, 'bankruptcy', debtor, `${p.name} couldn't pay ${money(amount)}, gave ${to} their last ${money(paid)}, and is bankrupt!`, { to: creditor, reason });
   if (checkLastStanding(s)) return;
   if (debtor === s.current) advanceTurn(s);
   else continueWith(s, then);
@@ -497,7 +581,7 @@ function continueWith(s: GameState, then: Continuation): void {
         return;
       }
       const [next, ...rest] = queue;
-      charge(s, next, then.to, then.amount, { ...then, queue: rest });
+      charge(s, next, then.to, then.amount, { ...then, queue: rest }, 'birthday');
       return;
     }
   }
@@ -510,7 +594,7 @@ function checkLastStanding(s: GameState): boolean {
   s.phase = 'gameOver';
   s.battle = null;
   s.debt = null;
-  if (s.winner !== null) log(s, `${s.players[s.winner].name} is the last player standing and wins!`);
+  if (s.winner !== null) note(s, 'game_over', s.winner, `${s.players[s.winner].name} is the last player standing and wins!`);
   return true;
 }
 
@@ -521,7 +605,7 @@ function endByRoundLimit(s: GameState): void {
   s.winner = best;
   s.phase = 'gameOver';
   s.round = s.roundLimit;
-  log(s, `Round limit reached. ${s.players[best].name} wins with a net worth of ${money(netWorth(s, best))}!`);
+  note(s, 'game_over', best, `Round limit reached. ${s.players[best].name} wins with a net worth of ${money(netWorth(s, best))}!`);
 }
 
 function advanceTurn(s: GameState): void {
@@ -563,16 +647,17 @@ function levelUp(s: GameState, pid: PlayerId, ref: FighterRef, free: boolean): v
   const how = free ? 'for free' : `for ${money(check.cost)}`;
   if (ref.kind === 'starter') {
     p.starterLevel += 1;
-    log(s, `${p.name} trained ${STARTERS[p.starter].name} to Lv ${p.starterLevel} ${how}.`);
+    note(s, 'level_up', pid, `${p.name} trained ${STARTERS[p.starter].name} to Lv ${p.starterLevel} ${how}.`, { level: p.starterLevel });
     return;
   }
   const t = s.tiles[ref.tile];
   const before = formAtLevel(s, ref.tile, t.level);
   t.level += 1;
   log(s, `${p.name} leveled ${before.name} to Lv ${t.level} ${how}.`);
-  if (stageForLevel(t.level) !== stageForLevel(t.level - 1)) {
-    log(s, `${before.name} evolved into ${formAtLevel(s, ref.tile, t.level).name}!`);
-  }
+  const evolved = stageForLevel(t.level) !== stageForLevel(t.level - 1);
+  if (evolved) log(s, `${before.name} evolved into ${formAtLevel(s, ref.tile, t.level).name}!`);
+  const evo = evolved ? ` It evolved into ${formAtLevel(s, ref.tile, t.level).name}!` : '';
+  event(s, 'level_up', pid, `${p.name} leveled ${before.name} to Lv ${t.level} ${how}.${evo}`, { tile: ref.tile, level: t.level });
 }
 
 /** One throw per landing: resolves the catch and always ends the landing. */
@@ -599,6 +684,16 @@ function throwBall(s: GameState, ball: ThrowBall): void {
   const cost = ball === 'master' ? ` for ${money(masterBallCost(s, i))}` : '';
   log(s, `${p.name} threw a ${BALLS[ball].name}${cost} at ${name}… ${caught ? 'caught!' : 'it broke free!'}`);
   if (caught) s.tiles[i] = { owner: pid, level: CONFIG.startLevel };
+  const odds = ball === 'master' ? '' : ` (${Math.floor(chance * 100 + 1e-9)}% chance)`;
+  event(
+    s,
+    caught ? 'catch_success' : 'catch_fail',
+    pid,
+    caught
+      ? `${p.name} caught ${name} with a ${BALLS[ball].name}${cost}${odds}.`
+      : `${name} broke free from ${p.name}'s ${BALLS[ball].name}${odds}.`,
+    { ball, chance, tile: i },
+  );
   s.lastThrow = { seq: (s.lastThrow?.seq ?? 0) + 1, player: pid, tile: i, ball, caught, shakes };
   s.pendingTile = null;
   s.phase = 'endTurn';
@@ -612,11 +707,11 @@ function applyCard(s: GameState): void {
   switch (effect.kind) {
     case 'gain':
       p.cash += effect.amount;
-      log(s, `${p.name} collected ${money(effect.amount)}.`);
+      note(s, 'money_gain', pid, `${p.name} collected ${money(effect.amount)}.`);
       s.phase = 'endTurn';
       return;
     case 'lose':
-      charge(s, pid, null, effect.amount, { k: 'endTurn' });
+      charge(s, pid, null, effect.amount, { k: 'endTurn' }, 'card');
       return;
     case 'rareCandy': {
       // Auto-pick: highest-fee creature that can still level, then the starter.
@@ -629,18 +724,19 @@ function applyCard(s: GameState): void {
       if (target) levelUp(s, pid, target, true);
       else {
         p.cash += effect.fallback;
-        log(s, `Nothing could level up, so ${p.name} sold it for ${money(effect.fallback)}.`);
+        note(s, 'money_gain', pid, `Nothing could level up, so ${p.name} sold it for ${money(effect.fallback)}.`);
       }
       s.phase = 'endTurn';
       return;
     }
     case 'advanceToGo':
       movePlayer(s, pid, BOARD_SIZE - p.position, true);
+      event(s, 'move', pid, `${p.name} flew to ${s.board[GO_TILE].name}.`, { tile: GO_TILE });
       resolveTile(s);
       return;
     case 'move':
       movePlayer(s, pid, effect.steps, effect.steps > 0);
-      log(s, `${p.name} moved to ${tileLabel(s, p.position)}.`);
+      note(s, 'move', pid, `${p.name} moved to ${tileLabel(s, p.position)}.`, { tile: p.position });
       resolveTile(s);
       return;
     case 'goToHideout':
@@ -659,7 +755,7 @@ function applyCard(s: GameState): void {
         log(s, `${p.name} got a ${name}.`);
       } else {
         p.cash += effect.fallback;
-        log(s, `${p.name}'s bag is full, so they sold the ${name} for ${money(effect.fallback)}.`);
+        note(s, 'money_gain', pid, `${p.name}'s bag is full, so they sold the ${name} for ${money(effect.fallback)}.`);
       }
       s.phase = 'endTurn';
       return;

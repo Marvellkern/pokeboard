@@ -241,7 +241,7 @@ export function actorOf(s: GameState): PlayerId | null {
     case 'debt':
       return s.debt!.debtor;
     case 'trade':
-      return s.pendingTrade!.to;
+      return s.pendingTrade!.answerer ?? s.pendingTrade!.to;
     default:
       return s.current;
   }
@@ -302,7 +302,7 @@ export function ballBuyCheck(s: GameState, ball: BallKind): { ok: boolean; reaso
 /** Offers can be made on your own turn before rolling (or in the hideout) and before ending it. */
 const TRADE_PHASES = new Set<Phase>(['roll', 'hideout', 'endTurn']);
 
-export type TradeBlock = 'phase' | 'used' | 'noPartner' | 'player' | 'tiles' | 'money' | 'empty';
+export type TradeBlock = 'phase' | 'used' | 'noPartner' | 'player' | 'tiles' | 'money' | 'empty' | 'final' | 'same';
 
 /** Can the current player make an offer right now (to anyone)? */
 export function canTrade(s: GameState): { ok: boolean; reason: TradeBlock | null } {
@@ -346,6 +346,41 @@ export function tradeCheck(s: GameState, offer: TradeOffer): { ok: boolean; reas
   const problem = sideProblem(s, s.current, offer.give) ?? sideProblem(s, to, offer.receive);
   if (problem) return { ok: false, reason: problem };
   if (!givesSomething(offer.give) || !givesSomething(offer.receive)) return { ok: false, reason: 'empty' };
+  return { ok: true, reason: null };
+}
+
+const SIDE_SORT = (x: TradeSide) => ({ tiles: [...x.tiles].sort((a, b) => a - b), money: x.money });
+const sameSides = (a: { give: TradeSide; receive: TradeSide }, b: { give: TradeSide; receive: TradeSide }) =>
+  JSON.stringify([SIDE_SORT(a.give), SIDE_SORT(a.receive)]) === JSON.stringify([SIDE_SORT(b.give), SIDE_SORT(b.receive)]);
+
+/** Proposals in the open negotiation so far (1 = the first offer). */
+export function proposalNumber(t: PendingTrade): number {
+  return (t.history?.length ?? 0) + 1;
+}
+
+/** The pending proposal from `pid`'s side: what they give and what they get. */
+export function tradeSidesFor(t: TradeOffer & { from: PlayerId }, pid: PlayerId): { give: TradeSide; receive: TradeSide } {
+  return pid === t.from ? { give: t.give, receive: t.receive } : { give: t.receive, receive: t.give };
+}
+
+const COUNTER_KEYS = new Set(['type', 'by', 'give', 'receive']);
+
+/**
+ * Validation of a counter from the player who must answer: same rules as any offer, while the
+ * proposal limit allows, and it must differ from the proposal it answers. give/receive are from the
+ * countering player's side.
+ */
+export function counterCheck(s: GameState, counter: { give: TradeSide; receive: TradeSide }): { ok: boolean; reason: TradeBlock | null } {
+  const t = s.pendingTrade;
+  if (s.phase !== 'trade' || !t) return { ok: false, reason: 'phase' };
+  if (proposalNumber(t) >= CONFIG.trade.maxProposals) return { ok: false, reason: 'final' };
+  if (Object.keys(counter).some((k) => !COUNTER_KEYS.has(k))) return { ok: false, reason: 'tiles' };
+  const me = t.answerer;
+  const other = me === t.from ? t.to : t.from;
+  const problem = sideProblem(s, me, counter.give) ?? sideProblem(s, other, counter.receive);
+  if (problem) return { ok: false, reason: problem };
+  if (!givesSomething(counter.give) || !givesSomething(counter.receive)) return { ok: false, reason: 'empty' };
+  if (sameSides(counter, tradeSidesFor(t, me))) return { ok: false, reason: 'same' };
   return { ok: true, reason: null };
 }
 
@@ -436,6 +471,7 @@ export function isLegal(s: GameState, a: Action): boolean {
   if (by !== undefined && by !== actorOf(s)) return false;
   // Offers can't be listed one by one; they are checked directly.
   if (body.type === 'PROPOSE_TRADE') return tradeCheck(s, body).ok;
+  if (body.type === 'COUNTER_TRADE') return counterCheck(s, body).ok;
   return legalActions(s).some((l) => sameAction(l, body as Action));
 }
 

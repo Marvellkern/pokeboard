@@ -20,11 +20,13 @@ import { Board } from './Board';
 import { Avatar, Outlined } from './common';
 import { logActor, money, playerColor, prefersReducedMotion, seatLabel, textOn } from './format';
 import { ChallengeModal } from './modals/ChallengeModal';
-import { FullLogModal, GameOverModal, LiquidateModal, ManageTeamModal } from './modals/OtherModals';
+import { LiquidateModal, ManageTeamModal } from './modals/OtherModals';
+import { GameLogPanel } from './recap/GameLogPanel';
+import { RecapScreen } from './recap/RecapScreen';
 import { TileInfoModal } from './modals/TileModals';
 import { TypeChartModal } from './modals/TypeChartModal';
 import { ShopModal } from './modals/ShopModal';
-import { TradeAnswerModal, TradeBuilderModal } from './modals/TradeModals';
+import { TradeAnswerModal, TradeBuilderModal, lastProposer } from './modals/TradeModals';
 import { PropertyCard } from './cards';
 import { BallIcon } from './icons';
 import { ThrowMedia, throwHeadline, useThrowAnimation } from './Throw';
@@ -154,9 +156,9 @@ export function GameScreen({ session }: { session: Session }) {
   const panelGame = held ? { ...held, log: game.log.filter((e) => e.id <= held.logSeq + 1) } : game;
   const boardRef = useRef<HTMLElement>(null);
   const compact = useCompact(boardRef);
-  const [manageOpen, setManageOpen] = useState(false);
+  /** Whose team is open (null = closed). */
+  const [teamOf, setTeamOf] = useState<PlayerId | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [logOpen, setLogOpen] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
   const [shopUi, setShopUi] = useState(false);
   const [tileInfo, setTileInfo] = useState<number | null>(null);
@@ -174,6 +176,9 @@ export function GameScreen({ session }: { session: Session }) {
 
   const humans = game.players.filter((p) => viewer.isMe(p.id) && !p.bankrupt).length;
   const actor = actorOf(game);
+  const myTeam = viewer.isMe(game.current)
+    ? game.current
+    : (game.players.find((p) => viewer.isMe(p.id) && !p.bankrupt) ?? game.players.find((p) => viewer.isMe(p.id)) ?? game.players[game.current]).id;
   const actorIsHuman = actor !== null && viewer.isMe(actor);
 
   // Pass-and-play cue: whenever the turn passes to a human (and there's more than one).
@@ -187,11 +192,16 @@ export function GameScreen({ session }: { session: Session }) {
   // Pass-and-play trades: hand the device to the recipient for the offer, then back to the proposer.
   const pending = game.phase === 'trade' ? game.pendingTrade : null;
   useEffect(() => {
-    if (!session.passAndPlay || !pending || humans < 2 || !viewer.isMe(pending.to)) return;
+    // Every hop of a negotiation hands the device to whoever must answer now.
+    if (!session.passAndPlay || !pending || humans < 2 || !viewer.isMe(pending.answerer)) return;
+    // A bot's counter goes straight to the human who is already holding the device.
+    const n = pending.history.length + 1;
+    if (n > 1 && !viewer.isMe(lastProposer(pending, n))) return;
     if (lastTradeBanner.current === game.logSeq) return;
     lastTradeBanner.current = game.logSeq;
-    const to = game.players[pending.to];
-    setBanner({ pid: pending.to, title: `Trade offer for ${to.name}`, note: `Pass the device to ${to.name}, then tap to see the offer.` });
+    const who = game.players[pending.answerer];
+    const what = pending.history.length > 0 ? 'Counter-offer' : 'Trade offer';
+    setBanner({ pid: pending.answerer, title: `${what} for ${who.name}`, note: `Pass the device to ${who.name}, then tap to see it.` });
   }, [pending, humans, session.passAndPlay, viewer, game.logSeq, game.players]);
 
   useEffect(() => {
@@ -206,7 +216,9 @@ export function GameScreen({ session }: { session: Session }) {
     if (!t || t.seq === lastTradeSeq.current) return;
     lastTradeSeq.current = t.seq;
     setTradeNote(t);
-    if (session.passAndPlay && humans > 1 && viewer.isMe(t.from) && viewer.isMe(t.to) && game.phase !== 'gameOver') {
+    // Back to the turn player, unless they gave the final answer themselves.
+    const answeredBy = t.answeredBy ?? t.to;
+    if (session.passAndPlay && humans > 1 && answeredBy !== t.from && viewer.isMe(t.from) && viewer.isMe(answeredBy) && game.phase !== 'gameOver') {
       const back = game.players[t.from];
       setBanner({ pid: t.from, title: `Back to ${back.name}`, note: `Pass the device back to ${back.name}, then tap to continue.` });
     }
@@ -256,7 +268,7 @@ export function GameScreen({ session }: { session: Session }) {
     {
       openShop: () => setShopUi(true),
       act,
-      openManage: () => setManageOpen(true),
+      openManage: () => setTeamOf(game.current),
       openPicker: () => setPickerOpen(true),
       openLiquidate: () => setLiquidateHidden(false),
       skipBanner: () => runsBots && botAct({ type: 'ACK' }),
@@ -265,6 +277,9 @@ export function GameScreen({ session }: { session: Session }) {
     },
     viewer,
   );
+  if (game.phase === 'trade' && session.counterWriting && !actorIsHuman && game.pendingTrade) {
+    stageView.sub = `${game.players[game.pendingTrade.answerer].name} is writing a counter-offer…`;
+  }
   // While a throw plays, the stage shows it on top of the big card.
   const view: StageView = throwAnim
     ? {
@@ -306,17 +321,15 @@ export function GameScreen({ session }: { session: Session }) {
           <aside className="flex w-full flex-col gap-4 lg:w-[420px] lg:flex-none">
             <SideHeader game={panelGame} roomCode={session.roomCode} />
             {session.sideSlot}
-            <PlayerCards game={panelGame} tags={session.playerTags} />
+            <PlayerCards game={panelGame} tags={session.playerTags} onOpen={setTeamOf} />
             <JustHappened game={panelGame} />
+            <GameLogPanel game={panelGame} />
             <div className="grid grid-cols-2 gap-3">
-              <button className="btn btn-sm on-bg" onClick={() => setManageOpen(true)}>
+              <button className="btn btn-sm on-bg" onClick={() => setTeamOf(myTeam)}>
                 My team
               </button>
               <button className="btn btn-sm on-bg" onClick={() => setChartOpen(true)}>
                 Type chart
-              </button>
-              <button className="btn btn-sm on-bg" onClick={() => setLogOpen(true)}>
-                Full log
               </button>
               {session.exitButtons.map((b) => (
                 <button key={b.label} className="btn btn-sm on-bg" onClick={b.onClick}>
@@ -344,10 +357,16 @@ export function GameScreen({ session }: { session: Session }) {
         {showHumanUi && game.phase === 'debt' && !liquidateHidden && (
           <LiquidateModal game={game} onAction={act} onClose={() => setLiquidateHidden(true)} />
         )}
-        {manageOpen && (
-          <ManageTeamModal game={game} canAct={showHumanUi && canManage(game)} onAction={act} onClose={() => setManageOpen(false)} />
+        {teamOf !== null && (
+          <ManageTeamModal
+            game={game}
+            pid={teamOf}
+            own={viewer.isMe(teamOf)}
+            canAct={teamOf === game.current && showHumanUi && canManage(game)}
+            onAction={act}
+            onClose={() => setTeamOf(null)}
+          />
         )}
-        {logOpen && <FullLogModal game={game} onClose={() => setLogOpen(false)} />}
         {chartOpen && <TypeChartModal onClose={() => setChartOpen(false)} />}
         {shopUi && showHumanUi && shopOpen(game) && <ShopModal game={game} onAction={act} onClose={() => setShopUi(false)} />}
         {tileInfo !== null && <TileInfoModal game={game} tile={tileInfo} onClose={() => setTileInfo(null)} />}
@@ -355,7 +374,14 @@ export function GameScreen({ session }: { session: Session }) {
           <TradeBuilderModal key={game.turnSeq} game={game} onAction={act} onClose={() => setTradeOpen(false)} />
         )}
         {showHumanUi && game.phase === 'trade' && !answerHidden && (
-          <TradeAnswerModal game={game} onAction={act} onClose={() => setAnswerHidden(true)} deadline={session.tradeDeadline} />
+          <TradeAnswerModal
+            key={`${game.turnSeq}-${game.pendingTrade?.history.length}`}
+            game={game}
+            onAction={act}
+            onClose={() => setAnswerHidden(true)}
+            deadline={session.tradeDeadline}
+            onCounterStart={session.onCounterStart}
+          />
         )}
         {tradeNote && !busy && (
           <button
@@ -378,7 +404,7 @@ export function GameScreen({ session }: { session: Session }) {
         )}
 
         {game.phase === 'gameOver' && !busy && (
-          <GameOverModal game={game} playAgain={session.playAgain} note={session.playAgainNote} />
+          <RecapScreen game={game} playAgain={session.playAgain} playAgainNote={session.playAgainNote} backToMenu={session.backToMenu} />
         )}
 
         {banner !== null && game.phase !== 'gameOver' && <TurnBanner game={game} banner={banner} onDismiss={() => setBanner(null)} />}
@@ -423,7 +449,15 @@ function SideHeader({ game, roomCode }: { game: GameState; roomCode?: string }) 
   );
 }
 
-function PlayerCards({ game, tags }: { game: GameState; tags: (pid: PlayerId) => { you: boolean; tags: string[] } }) {
+function PlayerCards({
+  game,
+  tags,
+  onOpen,
+}: {
+  game: GameState;
+  tags: (pid: PlayerId) => { you: boolean; tags: string[] };
+  onOpen: (pid: PlayerId) => void;
+}) {
   return (
     <section aria-label="Players" className="grid grid-cols-2 gap-3">
       {game.players.map((p) => {
@@ -438,9 +472,12 @@ function PlayerCards({ game, tags }: { game: GameState; tags: (pid: PlayerId) =>
         const color = playerColor(p);
         const t = tags(p.id);
         return (
-          <div
+          <button
+            type="button"
             key={p.id}
-            className={`card flex items-center gap-3 p-3 ${p.bankrupt ? 'opacity-50' : ''}`}
+            onClick={() => onOpen(p.id)}
+            aria-label={`${p.name}: see their team`}
+            className={`card flex w-full items-center gap-3 p-3 text-left transition-transform hover:-translate-y-0.5 ${p.bankrupt ? 'opacity-50' : ''}`}
             style={active ? { background: 'var(--yellow)', outline: '4px solid var(--ink)', outlineOffset: '-4px' } : undefined}
             aria-current={active ? 'true' : undefined}
           >
@@ -472,7 +509,7 @@ function PlayerCards({ game, tags }: { game: GameState; tags: (pid: PlayerId) =>
                 {!p.bankrupt && p.escapeRopes > 0 ? ` · ${WORDS.escapeRope} ×${p.escapeRopes}` : ''}
               </div>
             </div>
-          </div>
+          </button>
         );
       })}
     </section>
@@ -516,10 +553,18 @@ const turnBanner = (game: GameState, pid: PlayerId): Banner => ({
 });
 
 function tradeHeadline(game: GameState, t: TradeResult, isMe: (pid: PlayerId) => boolean): string {
-  const to = game.players[t.to].name;
-  if (t.outcome === 'accepted') return 'Trade accepted!';
+  const answeredBy = t.answeredBy ?? t.to;
+  const name = game.players[answeredBy].name;
+  const proposals = t.proposals ?? 1;
   if (t.outcome === 'cancelled') return 'Trade cancelled';
-  return isMe(t.to) && !isMe(t.from) ? 'You declined' : `${to} declined`;
+  if (proposals === 1) {
+    if (t.outcome === 'accepted') return 'Trade accepted!';
+    return isMe(answeredBy) && !isMe(t.from) ? 'You declined' : `${name} declined`;
+  }
+  // "Rina accepted your counter!" for whoever wrote the counter (on their own device).
+  const proposer = lastProposer(t, proposals);
+  const whose = isMe(proposer) && !isMe(answeredBy) ? 'your' : 'the';
+  return `${name} ${t.outcome === 'accepted' ? 'accepted' : 'declined'} ${whose} counter${t.outcome === 'accepted' ? '!' : ''}`;
 }
 
 /** "Rina gets Charmander, Bot 2 gets Squirtle + ₽60" (creatures are level 1 after a trade). */

@@ -105,6 +105,8 @@ export interface Debt {
   creditor: PlayerId | null;
   amount: number;
   then: Continuation;
+  /** Why it's owed (older saves: missing). */
+  reason?: EventMeta['reason'];
 }
 
 export type Phase =
@@ -135,10 +137,18 @@ export interface TradeOffer {
   receive: TradeSide;
 }
 
+/**
+ * The open negotiation. `give` / `receive` are always the newest proposal, seen from the turn player
+ * (`from`, who made the first offer); `to` is the other player. Counters alternate who answers.
+ */
 export interface PendingTrade extends TradeOffer {
   from: PlayerId;
   /** The phase the turn goes back to once the offer is answered. */
   returnPhase: Phase;
+  /** Who must answer now (accept, decline, or counter while the limit allows). */
+  answerer: PlayerId;
+  /** Earlier proposals, oldest first (also from `from`'s side). The newest one is give/receive. */
+  history: TradeOffer[];
 }
 
 /** The latest answered offer, for the UI's result banner (and the bots' no-repeat rule). */
@@ -147,6 +157,70 @@ export interface TradeResult extends TradeOffer {
   from: PlayerId;
   outcome: 'accepted' | 'declined' | 'cancelled';
   round: number;
+  /** How many proposals the negotiation had (1 = no counter). Older saves: missing. */
+  proposals?: number;
+  /** Who gave the final answer. Older saves: missing (it was `to`). */
+  answeredBy?: PlayerId;
+}
+
+export type GameEventType =
+  | 'start'
+  | 'roll'
+  | 'move'
+  | 'card'
+  | 'ball_purchase'
+  | 'catch_success'
+  | 'catch_fail'
+  | 'battle_won'
+  | 'battle_lost'
+  /** Money from one player to another or to the bank (fees, lost battles, cards, birthdays). */
+  | 'payment'
+  /** Money from the bank: GO, bonus tile, cards. */
+  | 'money_gain'
+  | 'level_up'
+  /** A creature released to pay a debt. */
+  | 'release'
+  | 'trade'
+  | 'trade_counter'
+  | 'trade_declined'
+  | 'bankruptcy'
+  | 'game_over';
+
+/**
+ * One structured, append-only game event (the recap reads these). `cash` and `worth` are every
+ * player's cash and net worth right after the event; money moved by an event is the difference
+ * from the previous event's snapshot.
+ */
+export interface GameEvent {
+  id: number;
+  /** Turn number (1-based, counts every turn of every player). */
+  turn: number;
+  round: number;
+  /** Who it's about (null = nobody in particular). */
+  player: PlayerId | null;
+  type: GameEventType;
+  /** Ready-to-show sentence. */
+  text: string;
+  cash: number[];
+  worth: number[];
+  meta?: EventMeta;
+}
+
+export interface EventMeta {
+  tile?: number;
+  ball?: ThrowBall;
+  /** Catch chance of the throw (0-1). */
+  chance?: number;
+  dice?: number[];
+  /** Battles: kind, and the other side's owner (null = a grunt). */
+  battle?: BattleKind;
+  opponent?: PlayerId | null;
+  /** Payments: who received it (null = the bank) and why. */
+  to?: PlayerId | null;
+  reason?: 'fee' | 'battle' | 'ambush' | 'hideout' | 'card' | 'birthday';
+  /** Trades: the other player. */
+  with?: PlayerId;
+  level?: number;
 }
 
 export interface LogEntry {
@@ -198,6 +272,8 @@ export interface GameState {
   lastTrade: TradeResult | null;
   /** Recently declined offers (kept a few rounds; bots don't repeat them). */
   tradeDeclines: TradeResult[];
+  /** Every meaningful event of the game, in order (for the game log and the recap). */
+  events: GameEvent[];
   /** Set when the game ends. */
   winner: PlayerId | null;
   /** Order in which players went bankrupt (for final ranking). */
@@ -235,6 +311,8 @@ export type ActionBody =
   | { type: 'RELEASE'; tile: number }
   | ({ type: 'PROPOSE_TRADE' } & TradeOffer)
   | { type: 'RESPOND_TRADE'; accept: boolean }
+  /** The answerer replaces the newest proposal; give/receive are from the countering player's side. */
+  | { type: 'COUNTER_TRADE'; give: TradeSide; receive: TradeSide }
   | { type: 'END_TURN' };
 
 export interface SetupPlayer {

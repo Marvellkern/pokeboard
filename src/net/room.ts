@@ -5,6 +5,7 @@
 import { CONFIG } from '../data/config';
 import { PLAYER_COLORS, STARTERS } from '../data/theme';
 import { migrateSave } from '../engine/board';
+import { packEvents, unpackEvents, type PackedEvent } from '../engine/eventCodec';
 import { createGame, reduce } from '../engine/reducer';
 import { isLegal } from '../engine/selectors';
 import type { Action, BoardMode, GameState } from '../engine/types';
@@ -54,6 +55,8 @@ export interface Room {
   seats: Seat[];
   presence: Record<string, Presence>;
   game: GameNode | null;
+  /** Online: the answerer opened the counter builder for this trade proposal (others see it; timers use it). */
+  counterDraft: { key: string; seat: number } | null;
 }
 
 export const roomPath = (code: string) => `rooms/${code}`;
@@ -125,7 +128,17 @@ export function parseRoom(code: string, raw: unknown): Room | null {
     seats: parseSeats(raw.seats),
     presence,
     game,
+    counterDraft:
+      isObj(raw.counterDraft) && typeof raw.counterDraft.key === 'string' && typeof raw.counterDraft.seat === 'number'
+        ? { key: raw.counterDraft.key, seat: raw.counterDraft.seat }
+        : null,
   };
+}
+
+/** A game state as stored in the database: the event log is packed small (it's resent on every move). */
+export function stringifyState(state: GameState): string {
+  const { events, ...rest } = state;
+  return JSON.stringify({ ...rest, packedEvents: packEvents(events) });
 }
 
 /** Parse and sanity-check a game state from the database. Returns null if it's unusable. */
@@ -134,6 +147,10 @@ export function parseState(json: string): GameState | null {
     const s = JSON.parse(json);
     if (!isObj(s) || !Array.isArray(s.players) || !Array.isArray(s.tiles) || typeof s.phase !== 'string') return null;
     if (!s.players.every((p: unknown) => isObj(p) && typeof p.cash === 'number')) return null;
+    if (Array.isArray(s.packedEvents)) {
+      s.events = unpackEvents(s.packedEvents as PackedEvent[], s.players.length);
+      delete s.packedEvents;
+    }
     return migrateSave(s as unknown as GameState);
   } catch {
     return null;
@@ -333,7 +350,7 @@ export async function startGame(be: Backend, code: string, uid: string, seed: nu
       },
       seed,
     );
-    return { ...cur, meta: { ...room.meta, status: 'playing' }, seats, game: { version: 1, stateJson: JSON.stringify(state) } };
+    return { ...cur, meta: { ...room.meta, status: 'playing' }, seats, game: { version: 1, stateJson: stringifyState(state) } };
   });
   return res.committed;
 }
@@ -352,7 +369,7 @@ export async function submitAction(be: Backend, code: string, action: Action): P
     if (cur === null) return null; // not cached yet; retried with the server value
     const state = parseState(cur.stateJson);
     if (!state || !isLegal(state, action)) return undefined;
-    return { version: cur.version + 1, stateJson: JSON.stringify(reduce(state, action)) };
+    return { version: cur.version + 1, stateJson: stringifyState(reduce(state, action)) };
   });
   return res.committed && res.value !== null ? 'applied' : 'rejected';
 }
@@ -374,7 +391,7 @@ export async function submitRun(be: Backend, code: string, next: (s: GameState) 
       applied++;
     }
     if (!applied) return undefined;
-    return { version: cur.version + 1, stateJson: JSON.stringify(state) };
+    return { version: cur.version + 1, stateJson: stringifyState(state) };
   });
   return res.committed && res.value !== null ? 'applied' : 'rejected';
 }
@@ -416,6 +433,11 @@ export function trackPresence(be: Backend, code: string, uid: string, onConnecte
     void be.onDisconnectWrite(path, { online: false, lastSeen: be.serverTime() });
     void be.write(path, { online: true, lastSeen: be.serverTime() });
   });
+}
+
+/** The answerer started writing a counter to the proposal identified by `key`. */
+export async function markCounterDraft(be: Backend, code: string, key: string, seat: number): Promise<void> {
+  await be.write(`${roomPath(code)}/counterDraft`, { key, seat });
 }
 
 export async function setTakeover(be: Backend, code: string, idx: number, on: boolean): Promise<void> {

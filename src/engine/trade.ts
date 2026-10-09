@@ -113,3 +113,27 @@ export function tradeEffects(s: GameState, offer: TradeOffer, from: PlayerId = s
   }
   return out;
 }
+
+type Sides = { give: TradeSide; receive: TradeSide };
+
+/** One difference between two versions of a proposal, from one player's side. */
+export type TradeChange =
+  | { kind: 'added'; side: 'give' | 'receive'; tile: number }
+  | { kind: 'removed'; side: 'give' | 'receive'; tile: number }
+  | { kind: 'money'; side: 'give' | 'receive'; before: number; after: number };
+
+/**
+ * What changed from `previous` to `current` (both seen from the same player's side): creatures added
+ * or removed on either side, and money before and after. The answer screen's "What changed" box reads this.
+ */
+export function tradeChanges(previous: Sides, current: Sides): TradeChange[] {
+  const out: TradeChange[] = [];
+  for (const side of ['give', 'receive'] as const) {
+    const before = previous[side];
+    const now = current[side];
+    for (const tile of now.tiles) if (!before.tiles.includes(tile)) out.push({ kind: 'added', side, tile });
+    for (const tile of before.tiles) if (!now.tiles.includes(tile)) out.push({ kind: 'removed', side, tile });
+    if (before.money !== now.money) out.push({ kind: 'money', side, before: before.money, after: now.money });
+  }
+  return out;
+}

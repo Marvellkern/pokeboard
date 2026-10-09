@@ -11,6 +11,7 @@ import {
   type SlotId,
 } from '../data/theme';
 import { shuffle } from './rng';
+import { netWorth } from './selectors';
 import type { BoardMode, BoardTile, GameState } from './types';
 
 const slotOfTile = (i: number): SlotId | undefined => PAIR_SLOTS.find((s) => s.tiles.includes(i))?.id;
@@ -121,17 +122,43 @@ export function withBalls(s: GameState): GameState {
 
 /** Save migration: games saved before trading have no offer pending and no trade history. */
 export function withTrades(s: GameState): GameState {
-  if (s.tradeDeclines !== undefined && s.pendingTrade !== undefined) return s;
+  const t = s.pendingTrade;
+  const oldPending = !!t && (t.answerer === undefined || !Array.isArray(t.history));
+  if (s.tradeDeclines !== undefined && t !== undefined && !oldPending) return s;
   return {
     ...s,
-    pendingTrade: s.pendingTrade ?? null,
+    // A pending offer from before counters existed is proposal 1, answered by its recipient.
+    pendingTrade: t ? { ...t, answerer: t.answerer ?? t.to, history: Array.isArray(t.history) ? t.history : [] } : null,
     tradeOffers: s.tradeOffers ?? 0,
     lastTrade: s.lastTrade ?? null,
     tradeDeclines: s.tradeDeclines ?? [],
   };
 }
 
+/**
+ * Save migration: games saved before the event log start one here, from a snapshot of the moment
+ * they were loaded (so the recap covers what happened after that).
+ */
+export function withEvents(s: GameState): GameState {
+  if (Array.isArray(s.events)) return s;
+  return {
+    ...s,
+    events: [
+      {
+        id: 1,
+        turn: s.turnSeq + 1,
+        round: s.round,
+        player: null,
+        type: 'start',
+        text: `Game log starts here (round ${s.round}): this game was saved before the log existed.`,
+        cash: s.players.map((p) => p.cash),
+        worth: s.players.map((_, i) => netWorth(s, i)),
+      },
+    ],
+  };
+}
+
 /** Every save migration, oldest first. */
 export function migrateSave(s: GameState): GameState {
-  return withTrades(withBalls(withBoard(s)));
+  return withEvents(withTrades(withBalls(withBoard(s))));
 }

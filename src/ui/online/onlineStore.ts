@@ -85,6 +85,7 @@ interface OnlineStore {
   start(): Promise<void>;
   rematch(): Promise<void>;
   takeover(idx: number, on: boolean): Promise<void>;
+  counterDraft(key: string, seat: number): Promise<void>;
   markFinished(): Promise<void>;
   /** A person on this device acts for their own seat. */
   act(a: Action): void;
@@ -228,6 +229,9 @@ export const useOnline = create<OnlineStore>((set, get) => {
     },
     async takeover(idx, on) {
       await R.setTakeover(be(), get().code!, idx, on);
+    },
+    async counterDraft(key, seat) {
+      await R.markCounterDraft(be(), get().code!, key, seat);
     },
     async markFinished() {
       await R.markFinished(be(), get().code!);

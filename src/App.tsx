@@ -17,12 +17,13 @@ import { localViewer } from './ui/viewer';
 let autoJoinTried = false;
 
 /** Pass-and-play on this device: every human seat is "me", this device plays the bots. */
-function LocalGame() {
+function LocalGame({ onHome }: { onHome: () => void }) {
   const game = useStore((s) => s.game)!;
   const dispatch = useStore((s) => s.dispatch);
   const dispatchMany = useStore((s) => s.dispatchMany);
   const toSetup = useStore((s) => s.toSetup);
   const discardSave = useStore((s) => s.discardSave);
+  const start = useStore((s) => s.start);
   const viewer = useMemo(() => localViewer(game), [game]);
   const session: Session = {
     game,
@@ -41,11 +42,22 @@ function LocalGame() {
     syncProblem: false,
     playerTags: () => ({ you: false, tags: [] }),
     exitButtons: [{ label: 'Save & exit', onClick: toSetup }],
+    // Same players, seats and settings, fresh board and seed.
     playAgain: {
       label: 'Play again',
+      onClick: () =>
+        start({
+          players: game.players.map((p) => ({ name: p.name, color: p.color, isBot: p.isBot, starter: p.starter })),
+          roundLimit: game.roundLimit,
+          boardMode: game.boardMode,
+        }),
+    },
+    backToMenu: {
+      label: 'Back to menu',
       onClick: () => {
         discardSave();
         toSetup();
+        onHome();
       },
     },
   };
@@ -90,6 +102,6 @@ export default function App() {
 
   if (onlineCode) return <OnlineApp />;
   if (mode === 'home' && screen !== 'game') return <HomeScreen onLocal={() => setMode('local')} />;
-  if (screen === 'game' && game) return <LocalGame />;
+  if (screen === 'game' && game) return <LocalGame onHome={() => setMode('home')} />;
   return <SetupScreen onHome={() => setMode('home')} />;
 }

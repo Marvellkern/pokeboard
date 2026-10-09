@@ -34,8 +34,14 @@ export interface Session {
   /** Game over: who may start another game, and what everyone else is told. */
   playAgain: SessionButton | null;
   playAgainNote?: string;
+  /** Leave the finished game for the menu. */
+  backToMenu: SessionButton;
   /** Online: when a pending trade offer is auto-declined (ms since epoch, this device's clock). */
   tradeDeadline?: number;
+  /** Online: the answerer is writing a counter-offer right now. */
+  counterWriting?: boolean;
+  /** Online: this device opened the counter builder (starts the longer counter timer for everyone). */
+  onCounterStart?(): void;
   /** The screen reports when it's animating, so incoming online updates can wait their turn. */
   onBusyChange?(busy: boolean): void;
 }

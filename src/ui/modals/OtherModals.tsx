@@ -1,41 +1,43 @@
 import { CONFIG } from '../../data/config';
-import { STARTERS, WORDS } from '../../data/theme';
+import { WORDS } from '../../data/theme';
 import {
   fighterInfo,
   fightersOf,
   isLegendary,
   levelUpCheck,
-  netWorth,
   ownedTiles,
-  ranking,
   releaseValue,
   tileFee,
   tileForm,
   tileType,
 } from '../../engine/selectors';
-import type { Action, GameState } from '../../engine/types';
-import { Avatar, Chip, Modal, Outlined, PlayerName, Render, TypeChip } from '../common';
-import { levelBlockText, logActor, money, playerColor } from '../format';
+import type { Action, GameState, PlayerId } from '../../engine/types';
+import { Chip, Modal, PlayerName, Render, TypeChip } from '../common';
+import { levelBlockText, money } from '../format';
 
+/** A player's team. `own` = it's this device's player (leveling controls are shown); `canAct` = they can level right now. */
 export function ManageTeamModal({
   game,
+  pid,
+  own,
   canAct,
   onAction,
   onClose,
 }: {
   game: GameState;
+  pid: PlayerId;
+  own: boolean;
   canAct: boolean;
   onAction: (a: Action) => void;
   onClose: () => void;
 }) {
-  const pid = game.current;
   const p = game.players[pid];
   const fighters = fightersOf(game, pid).map((ref) => fighterInfo(game, pid, ref));
   return (
     <Modal title={`${p.name}'s team`} onClose={onClose} wide>
       <p className="mb-3 text-[15px]">
         Cash: <b className="font-display text-[18px]">{money(p.cash)}</b>
-        {!canAct && <span className="ml-2 text-ink-soft">Leveling is only possible on your turn: before rolling, while deciding to buy, or before ending it.</span>}
+        {own && !canAct && <span className="ml-2 text-ink-soft">Leveling is only possible on your turn: before rolling, while deciding to buy, or before ending it.</span>}
       </p>
       <ul className="flex flex-col gap-2.5">
         {fighters.map((f) => {
@@ -59,16 +61,18 @@ export function ManageTeamModal({
                   {!legendary && check.reason !== 'maxLevel' && <span className="font-extrabold text-ink-soft">Next {money(check.cost)}</span>}
                 </div>
               </div>
-              <div className="flex flex-col items-end gap-1">
-                <button
-                  className="btn btn-sm btn-primary"
-                  disabled={!check.ok || !canAct}
-                  onClick={() => onAction({ type: 'LEVEL_UP', target: f.ref })}
-                >
-                  Level up
-                </button>
-                {reason && <span className="text-[12.5px] font-extrabold text-ink-soft">{reason}</span>}
-              </div>
+              {own && (
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    className="btn btn-sm btn-primary"
+                    disabled={!check.ok || !canAct}
+                    onClick={() => onAction({ type: 'LEVEL_UP', target: f.ref })}
+                  >
+                    Level up
+                  </button>
+                  {reason && <span className="text-[12.5px] font-extrabold text-ink-soft">{reason}</span>}
+                </div>
+              )}
             </li>
           );
         })}
@@ -127,84 +131,3 @@ export function LiquidateModal({
     </Modal>
   );
 }
-
-export function FullLogModal({ game, onClose }: { game: GameState; onClose: () => void }) {
-  const entries = [...game.log].reverse();
-  return (
-    <Modal title="Full log" onClose={onClose} wide>
-      <ol className="flex flex-col gap-1 text-[15px]">
-        {entries.map((e, k) => {
-          if (e.text.startsWith('──')) {
-            return (
-              <li key={e.id} className="py-1 text-center text-[13px] text-ink-soft">
-                {e.text}
-              </li>
-            );
-          }
-          const who = logActor(game, e.text);
-          return (
-            <li key={e.id} className={`flex items-start gap-2 ${k === 0 ? 'font-black' : 'text-ink-soft'}`}>
-              <span
-                className="mt-[6px] inline-block h-2.5 w-2.5 flex-none rounded-full border-2 border-ink"
-                style={{ background: who ? playerColor(who) : 'var(--ink-soft)' }}
-                aria-hidden
-              />
-              {e.text}
-            </li>
-          );
-        })}
-      </ol>
-    </Modal>
-  );
-}
-
-export function GameOverModal({
-  game,
-  playAgain,
-  note,
-}: {
-  game: GameState;
-  playAgain: { label: string; onClick: () => void } | null;
-  note?: string;
-}) {
-  const order = ranking(game);
-  const winner = game.winner !== null ? game.players[game.winner] : null;
-  return (
-    <Modal title="Game over!" outlinedTitle>
-      <div className="flex flex-col gap-3">
-        {winner && (
-          <div className="flex flex-col items-center gap-2 text-center">
-            <Avatar player={winner} dex={STARTERS[winner.starter].dex} name={STARTERS[winner.starter].name} size={120} ring={7} />
-            <Outlined className="text-[36px]">{winner.name} wins!</Outlined>
-          </div>
-        )}
-        <p className="text-center text-[15px] text-ink-soft">Rounds played: {game.round}</p>
-        <ol className="flex flex-col gap-1.5">
-          {order.map((id, k) => {
-            const p = game.players[id];
-            return (
-              <li
-                key={id}
-                className={`flex items-center justify-between rounded-2xl border-[3px] border-ink px-3 py-2 ${k === 0 ? 'bg-yellow' : 'bg-white'}`}
-              >
-                <span className="flex items-center gap-2">
-                  <span className="font-display text-[18px] font-bold">{k + 1}.</span>
-                  <PlayerName player={p} />
-                </span>
-                <span className="font-display text-[17px] font-semibold">{p.bankrupt ? 'Out' : money(netWorth(game, id))}</span>
-              </li>
-            );
-          })}
-        </ol>
-        {playAgain ? (
-          <button className="btn btn-primary btn-lg self-center" onClick={playAgain.onClick}>
-            {playAgain.label}
-          </button>
-        ) : (
-          note && <p className="text-center text-[15px] font-extrabold text-ink-soft">{note}</p>
-        )}
-      </div>
-    </Modal>
-  );
-}
-

@@ -24,7 +24,7 @@ import { BALLS, BOARD_TYPES, PAIR_SLOTS, SHOP_BALLS, TYPES, TYPE_CHART, type Thr
 import { typeMultiplier } from '../engine/battle';
 import { chooseAction } from '../engine/bot';
 import { createGame, reduce } from '../engine/reducer';
-import { GO_TILE, isProperty, masterBallCost, tileFee, tilePrice } from '../engine/selectors';
+import { GO_TILE, isProperty, masterBallCost, tileFee, tilePrice, tradeSidesFor } from '../engine/selectors';
 import type { BoardMode, GameState } from '../engine/types';
 
 const args = process.argv.slice(2);
@@ -77,6 +77,11 @@ const maxLevels: number[] = [];
 let tradesProposed = 0;
 const tradesAccepted = { swap: 0, cash: 0, other: 0 };
 let tradesCompletingPair = 0;
+// Counter-offers: made, accepted (a trade that closed on a counter), extra cash asked, longest negotiation.
+let countersMade = 0;
+let closedViaCounter = 0;
+let counterExtra = 0;
+let longestNegotiation = 0;
 const pairCount = (st: GameState) => PAIR_SLOTS.filter((_, k) => pairOwner(st, k) !== null).length;
 // Fees charged to attackers (the amount owed), by the fee tile's type.
 const feeByType: Partial<Record<TypeId, number>> = {};
@@ -148,12 +153,19 @@ for (let g = 0; g < GAMES; g++) {
     if (s === prev) throw new Error(`Bot chose illegal action ${JSON.stringify(action)} in ${prev.phase}`);
 
     if (action.type === 'PROPOSE_TRADE') tradesProposed++;
+    if (action.type === 'COUNTER_TRADE') {
+      countersMade++;
+      const before = tradeSidesFor(prev.pendingTrade!, prev.pendingTrade!.answerer);
+      counterExtra += action.receive.money - before.receive.money + (before.give.money - action.give.money);
+    }
+    if (s.pendingTrade) longestNegotiation = Math.max(longestNegotiation, s.pendingTrade.history.length + 1);
     if (action.type === 'RESPOND_TRADE' && s.lastTrade?.outcome === 'accepted') {
       const t = s.lastTrade;
       const both = t.give.tiles.length > 0 && t.receive.tiles.length > 0;
       const cashOnly = t.give.tiles.length === 0 || t.receive.tiles.length === 0;
       tradesAccepted[both ? 'swap' : cashOnly ? 'cash' : 'other']++;
       if (pairCount(s) > pairCount(prev)) tradesCompletingPair++;
+      if ((t.proposals ?? 1) > 1) closedViaCounter++;
     }
 
     if (prev.phase === 'buy' && action.type === 'THROW') {
@@ -338,6 +350,11 @@ const catchStats = [
   `── Trading ──`,
   `Trades per game:                   proposed ${(tradesProposed / GAMES).toFixed(2)}  accepted ${((tradesAccepted.swap + tradesAccepted.cash + tradesAccepted.other) / GAMES).toFixed(2)}   (accepted 1-5)`,
   `Accepted trades:                   pair swaps ${tradesAccepted.swap}  cash buys ${tradesAccepted.cash}  (${tradesCompletingPair} completed a pair)`,
+  (() => {
+    const accepted = tradesAccepted.swap + tradesAccepted.cash + tradesAccepted.other;
+    const share = (a: number, b: number) => (b ? `${((100 * a) / b).toFixed(1)}%` : 'n/a');
+    return `Counter-offers:                    ${(countersMade / GAMES).toFixed(2)}/game, ${share(closedViaCounter, countersMade)} accepted (≥ 30%), ${share(closedViaCounter, accepted)} of trades closed on a counter, avg extra asked ${countersMade ? Math.round(counterExtra / countersMade) : 0}, longest negotiation ${longestNegotiation} (≤ ${CONFIG.trade.maxProposals})`;
+  })(),
   '',
 ];
 

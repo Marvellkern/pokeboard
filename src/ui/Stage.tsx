@@ -6,6 +6,7 @@ import {
   actorOf,
   canManage,
   canTrade,
+  proposalNumber,
   challengeCosts,
   challengeOpponent,
   gruntLevel,
@@ -24,7 +25,7 @@ import { Outlined } from './common';
 import { chanceText, money } from './format';
 import { BallIcon } from './icons';
 import { battleAllBots, type Viewer } from './viewer';
-import { TradeSummaryCard } from './modals/TradeModals';
+import { TradeSummaryCard, lastProposer } from './modals/TradeModals';
 
 export interface StageAction {
   key: string;
@@ -235,10 +236,18 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
 
     case 'trade': {
       const t = game.pendingTrade!;
-      const from = game.players[t.from];
-      const to = game.players[t.to];
+      const n = proposalNumber(t);
+      const proposer = lastProposer(t, n);
+      const by = viewer.isMe(proposer) && !actorIsHuman ? 'You' : game.players[proposer].name;
+      const answerer = game.players[t.answerer].name;
       return {
-        headline: actorIsHuman ? `${from.name} offers you a trade!` : `${viewer.isMe(t.from) ? 'You' : from.name} offered ${to.name} a trade`,
+        headline: actorIsHuman
+          ? n === 1
+            ? `${by} offers you a trade!`
+            : `${by} countered your offer!`
+          : n === 1
+            ? `${by} offered ${answerer} a trade`
+            : `${by} countered ${answerer}'s offer`,
         sub: sub(),
         detail: (fixed) => <TradeSummaryCard game={game} fixed={fixed} />,
         actions: only([{ key: 'review', label: 'See the offer', variant: 'primary', onClick: h.openTradeAnswer }]),

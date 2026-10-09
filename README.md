@@ -33,6 +33,8 @@ src/
     reducer.ts       createGame(setup, seed), reduce(state, action) → state
     board.ts         generateBoard(rng, 'shuffled' | 'classic'), save migration (withBoard)
     trade.ts         applying a trade, tradeEffects (what an offer would do)
+    recap.ts         standings, winning margin, key moments (from the event log)
+    eventCodec.ts    the event log packed small for online sync
     battle.ts        battle math (damage, Protect, turn cap)
     selectors.ts     fees, values, legal actions, who acts next
     rng.ts           seeded RNG (its state lives in GameState.rng)
@@ -179,7 +181,11 @@ On your own turn, before rolling (also in the hideout) or before ending it, you 
 
 **Bots** value a tile at its price, × 1.6 if it would complete (or, given away, breaks) their pair; a legendary at ₽200 × (1 + 0.25 × legendaries held). Giving a tile away also counts its lost levels, any partner dropping to level 2, and a danger premium of 0.5 × price if it hands the other player a pair (unless the bot completes one too). They accept when value received ≥ value given × the accept ratio. Before rolling they offer, in order: a **pair swap** (whoever gets the pricier tile adds half the difference in cash), or a **cash buy** at 2 × price if they keep ₽300. They don't repeat a declined offer to the same player for 3 rounds. All of these numbers are in `config.ts` (`trade`, `bot.trade`).
 
-**Pass-and-play:** an offer to another human shows "Pass the device to …" first, then the offer, then "Pass the device back to …". **Online:** the offer appears on the recipient's device with a 30-second countdown (`trade.responseSeconds`); everyone else sees "… offered … a trade" and waits. If the recipient is offline or doesn't answer in time, the device running the bots declines for them.
+**Counter-offers.** The player answering can also **Counter**: send back a changed version (anything on either side) that replaces the proposal. A negotiation has at most 3 proposals (`trade.maxProposals`): A offers, B may counter, A may counter back, then B can only accept or decline. A counter must differ from what it answers and follows every trade rule; only the newest proposal can be accepted, and it's checked again at acceptance. The whole chain is the turn player's one offer. The answer screen shows "Offer 1 of 3" / "Counter 2 of 3" / "Final offer 3 of 3", a **What changed** box (from the engine's `tradeChanges`), "New" tags and struck-through removed items; the counter builder opens pre-filled. Bots answer as before, except that an opening offer that's only a little short (gap ≤ 40% of what they need, `bot.trade.counterGapShare`) gets a cash counter for the gap, rounded up to ₽10 (paying less first, then asking for more), if the other player can afford it. Bots never counter a counter, and a negotiation that ends in a decline counts as the opening offer being declined. Online, opening the builder gives 60 seconds to send (`trade.counterSeconds`) and others see "… is writing a counter-offer…".
+
+Sim with counters (1,000 games, 4 bots, round limit 20, classic / shuffled; baseline = trading before counters): accepted trades 2.41 / 2.40 → 2.42 / 2.41 per game; ≥ 1 pair by round 10 94.9 / 95.2% → 95.0 / 95.4% (round 20: 100%); 0.21 / 0.22 counters per game, 94-95% of them accepted, 8-9% of trades closed on a counter, average ₽96-99 asked; longest negotiation 2 (bots never reach 3); no bankruptcies before round 5. Seat balance unchanged (P4 about 18%, already outside 20-30%). No tuning needed.
+
+**Pass-and-play:** every hop between two humans shows "Pass the device to …" (a full 3-proposal chain passes it three times), then "Pass the device back to …" if needed. A bot's answer or counter appears straight away. **Online:** the offer appears on the recipient's device with a 30-second countdown (`trade.responseSeconds`); everyone else sees "… offered … a trade" and waits. If the recipient is offline or doesn't answer in time, the device running the bots declines for them.
 
 **Sim (1,000 games, 4 bots, round limit 20, classic / shuffled).** Baseline is the same code with trading switched off.
 
@@ -201,7 +207,27 @@ Tuning followed the brief's order. At the brief's start values, cash buys were n
 
 **Missed: seat balance.** P4 wins 17-18% and shuffled P1 33%. This was already outside 20-30% at baseline (P1 31%, P4 19%). Early cash buys favor whoever acts first with full cash. Rules weren't changed to chase it, per the brief. **Side effects worth knowing:** bankruptcies almost quadruple and fees overtake GO about 9 rounds earlier, both toward the fee update's targets. Unowned tiles at the end rise from 20% to 33%, because bots spend on pairs instead of catching. That moves the ball update's target the wrong way.
 
-Owner calls: offers per turn (1), the level-1 reset (the softer option is "drops 2 levels"), counter-offers (none), and the bot multipliers.
+Owner calls: offers per turn (1), proposals per negotiation (3), the level-1 reset (the softer option is "drops 2 levels"), bots countering with cash only, the online timers (30 s to answer, 60 s to write a counter), and the bot multipliers.
+
+## Game log and recap
+
+**Event log.** The engine records a structured event for everything that moves money, ownership or position: the start, rolls (with where you landed), card draws and card moves, being sent to the hideout, ball purchases, catches and misses (ball and odds), battle wins and losses (fee, ambush and hideout battles), payments (fees, lost battles, cards, birthdays), money from the bank (GO, the bonus tile, cards), level-ups (with evolutions), releases during debt, trades and declined offers, bankruptcy, and game over. Each event has a ready-to-show sentence plus every player's cash and net worth right after it (`GameState.events`, written in `reducer.ts`). How much money an event moved is the difference from the previous snapshot. Not logged as events: deciding not to catch, Escape Ropes, the "landed on…" lines (the roll event names the tile), and trade offers on their own (their answer is logged). An average 20-round bot game has about 220 events.
+
+Online, the log is part of the authoritative game state, so every device shows the same recap. It's sent packed (`engine/eventCodec.ts`, about 23 KB for a whole game instead of 41 KB), because online play rewrites the state on every move. Games saved before the log existed start their log when they're loaded.
+
+**Live log.** A Game log panel in the side panel: newest first, an icon per event type, and money changes as `P2 +₽100` / `B4 −₽90` chips (seat label and sign, not color alone). Filters by type and by player. Closed by default; tap to open.
+
+**Recap** (replaces the old game-over box, `ui/recap/`):
+1. Winner banner with net worth and the margin over second place (or "last player standing"), with a short bounce and confetti (off with reduced motion).
+2. Final standings: net worth, cash, Pokémon owned, battles won and lost (a fee battle counts for both sides).
+3. "How it went": net worth (default, since it decides the winner) or cash over the game, one line per player, the winner's thicker, seat labels at the line ends. Inline SVG, no chart library. Tap, drag or use the arrow keys to see the event at any point.
+4. Key moments, each shown only when the data supports it (`engine/recap.ts`, thresholds in `config.ts` under `recap`):
+   - **Comeback:** the winner was behind the leader by at least 25% of starting money, then took the lead and kept it to the end.
+   - **Biggest swing:** the single event that moved the most net worth for one player.
+   - **Luckiest catch:** the lowest-odds catch with a carried ball, if it was 35% or less.
+   - **Battle star:** the most battles won, if one player clearly leads with 3 or more.
+5. Full log behind "Show full log", with type and player filters. "Find it in the log" on a key moment jumps to its event.
+6. **Play again** (local: same players and settings, new board; online: the host returns everyone to the lobby) and **Back to menu**.
 
 ## Balance: fee and economy update
 
@@ -280,4 +306,4 @@ Levers outside this brief's allowed moves (owner's call): faster pair completion
 
 ## Not in the MVP
 
-Auctions, mortgages, doubles, counter-offers, battle XP, status effects, per-Pokémon stats or unique moves, chat, spectators, sound.
+Auctions, mortgages, doubles, battle XP, status effects, per-Pokémon stats or unique moves, chat, spectators, sound.
