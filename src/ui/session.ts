@@ -34,6 +34,8 @@ export interface Session {
   /** Game over: who may start another game, and what everyone else is told. */
   playAgain: SessionButton | null;
   playAgainNote?: string;
+  /** Online: when a pending trade offer is auto-declined (ms since epoch, this device's clock). */
+  tradeDeadline?: number;
   /** The screen reports when it's animating, so incoming online updates can wait their turn. */
   onBusyChange?(busy: boolean): void;
 }

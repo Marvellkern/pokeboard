@@ -117,8 +117,37 @@ export type Phase =
   | 'battle'
   | 'battleOver'
   | 'debt'
+  /** A trade offer is waiting for the recipient's answer (returns to `pendingTrade.returnPhase`). */
+  | 'trade'
   | 'endTurn'
   | 'gameOver';
+
+/** One side of a trade: creature tiles plus money. */
+export interface TradeSide {
+  tiles: number[];
+  money: number;
+}
+
+/** A trade offer from the current player: what they give and what they get. */
+export interface TradeOffer {
+  to: PlayerId;
+  give: TradeSide;
+  receive: TradeSide;
+}
+
+export interface PendingTrade extends TradeOffer {
+  from: PlayerId;
+  /** The phase the turn goes back to once the offer is answered. */
+  returnPhase: Phase;
+}
+
+/** The latest answered offer, for the UI's result banner (and the bots' no-repeat rule). */
+export interface TradeResult extends TradeOffer {
+  seq: number;
+  from: PlayerId;
+  outcome: 'accepted' | 'declined' | 'cancelled';
+  round: number;
+}
 
 export interface LogEntry {
   id: number;
@@ -161,6 +190,14 @@ export interface GameState {
   shopBuys: number;
   /** The latest throw, for the UI to animate (outcome already applied). */
   lastThrow: ThrowResult | null;
+  /** The offer waiting for an answer (phase 'trade'). */
+  pendingTrade: PendingTrade | null;
+  /** Offers the current player has made this turn (limit: CONFIG.trade.offersPerTurn). */
+  tradeOffers: number;
+  /** The latest answered offer. */
+  lastTrade: TradeResult | null;
+  /** Recently declined offers (kept a few rounds; bots don't repeat them). */
+  tradeDeclines: TradeResult[];
   /** Set when the game ends. */
   winner: PlayerId | null;
   /** Order in which players went bankrupt (for final ranking). */
@@ -196,6 +233,8 @@ export type ActionBody =
   | { type: 'ACK' }
   | { type: 'LEVEL_UP'; target: FighterRef }
   | { type: 'RELEASE'; tile: number }
+  | ({ type: 'PROPOSE_TRADE' } & TradeOffer)
+  | { type: 'RESPOND_TRADE'; accept: boolean }
   | { type: 'END_TURN' };
 
 export interface SetupPlayer {

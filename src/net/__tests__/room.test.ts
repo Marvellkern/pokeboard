@@ -156,6 +156,21 @@ describe('starting and syncing the game', () => {
     expect((await room(s.host, s.code)).game!.version).toBe(1);
   });
 
+  it('trade offers go through the same path; only the recipient seat can answer', async () => {
+    const s = await startedRoom();
+    const offer = { type: 'PROPOSE_TRADE' as const, to: 1, give: { tiles: [], money: 100 }, receive: { tiles: [], money: 10 } };
+    expect(await submitAction(s.guest, s.code, { ...offer, by: 1 })).toBe('rejected'); // not their turn
+    expect(await submitAction(s.host, s.code, { ...offer, by: 0 })).toBe('applied');
+    // While it's pending, nothing else goes through, and the proposer can't answer for the recipient.
+    expect(await submitAction(s.host, s.code, { type: 'ROLL', by: 0 })).toBe('rejected');
+    expect(await submitAction(s.host, s.code, { type: 'RESPOND_TRADE', accept: true, by: 0 })).toBe('rejected');
+    expect(await submitAction(s.guest, s.code, { type: 'RESPOND_TRADE', accept: true, by: 1 })).toBe('applied');
+    const state = parseState((await room(s.host, s.code)).game!.stateJson)!;
+    expect(state.lastTrade?.outcome).toBe('accepted');
+    expect(state.players[1].cash - state.players[0].cash).toBe(180);
+    expect(state.phase).toBe('roll');
+  });
+
   it('the feed ignores stale or duplicate versions and survives a bad state', async () => {
     const s = await startedRoom();
     const feed = new GameFeed();

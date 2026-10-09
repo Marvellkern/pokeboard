@@ -119,7 +119,19 @@ export function withBalls(s: GameState): GameState {
   };
 }
 
+/** Save migration: games saved before trading have no offer pending and no trade history. */
+export function withTrades(s: GameState): GameState {
+  if (s.tradeDeclines !== undefined && s.pendingTrade !== undefined) return s;
+  return {
+    ...s,
+    pendingTrade: s.pendingTrade ?? null,
+    tradeOffers: s.tradeOffers ?? 0,
+    lastTrade: s.lastTrade ?? null,
+    tradeDeclines: s.tradeDeclines ?? [],
+  };
+}
+
 /** Every save migration, oldest first. */
 export function migrateSave(s: GameState): GameState {
-  return withBalls(withBoard(s));
+  return withTrades(withBalls(withBoard(s)));
 }

@@ -65,6 +65,19 @@ const creatureTiles = (st: GameState) => st.board.map((_, i) => i).filter((i) =>
 // Pair slots: who first completed each slot (owned both tiles), and who held it at the end.
 const slotFirst = PAIR_SLOTS.map(() => tally());
 const slotEnd = PAIR_SLOTS.map(() => tally());
+// The round in which each game's first pair was completed (null: never).
+const firstPairRounds: (number | null)[] = [];
+const PAIR_ROUNDS = [5, 10, 15, 20];
+// Completed pairs held at the end of these rounds (or at game end if it ended earlier), and the
+// highest creature level reached in each game.
+const PAIR_COUNT_ROUNDS = [10, 20];
+const pairsAt: Record<number, number[]> = Object.fromEntries(PAIR_COUNT_ROUNDS.map((r) => [r, []]));
+const maxLevels: number[] = [];
+// Trades: offers made, and accepted ones split into pair swaps (creatures both ways) vs cash buys.
+let tradesProposed = 0;
+const tradesAccepted = { swap: 0, cash: 0, other: 0 };
+let tradesCompletingPair = 0;
+const pairCount = (st: GameState) => PAIR_SLOTS.filter((_, k) => pairOwner(st, k) !== null).length;
 // Fees charged to attackers (the amount owed), by the fee tile's type.
 const feeByType: Partial<Record<TypeId, number>> = {};
 const addFee = (type: TypeId, amount: number) => (feeByType[type] = (feeByType[type] ?? 0) + amount);
@@ -116,6 +129,9 @@ for (let g = 0; g < GAMES; g++) {
   const firstCompleter: (number | null)[] = PAIR_SLOTS.map(() => null);
   const goLine = `passed ${s.board[GO_TILE].name} and collected`;
   let firstBankruptRound: number | null = null;
+  let firstPairRound: number | null = null;
+  let maxLevel = CONFIG.startLevel;
+  const pairsRecorded = new Set<number>();
   const gamePairFees: Partial<Record<TypeId, number>> = {};
   const addPairFee = (st: GameState, tile: number, amount: number) => {
     if (st.board[tile].kind !== 'pokemon') return;
@@ -130,6 +146,15 @@ for (let g = 0; g < GAMES; g++) {
     const prev = s;
     s = reduce(s, action);
     if (s === prev) throw new Error(`Bot chose illegal action ${JSON.stringify(action)} in ${prev.phase}`);
+
+    if (action.type === 'PROPOSE_TRADE') tradesProposed++;
+    if (action.type === 'RESPOND_TRADE' && s.lastTrade?.outcome === 'accepted') {
+      const t = s.lastTrade;
+      const both = t.give.tiles.length > 0 && t.receive.tiles.length > 0;
+      const cashOnly = t.give.tiles.length === 0 || t.receive.tiles.length === 0;
+      tradesAccepted[both ? 'swap' : cashOnly ? 'cash' : 'other']++;
+      if (pairCount(s) > pairCount(prev)) tradesCompletingPair++;
+    }
 
     if (prev.phase === 'buy' && action.type === 'THROW') {
       const t = s.lastThrow!;
@@ -160,7 +185,15 @@ for (let g = 0; g < GAMES; g++) {
     if (firstBankruptRound === null && s.bankruptOrder.length > 0) firstBankruptRound = prev.round;
     PAIR_SLOTS.forEach((_, k) => {
       if (firstCompleter[k] === null) firstCompleter[k] = pairOwner(s, k);
+      if (firstPairRound === null && firstCompleter[k] !== null) firstPairRound = prev.round;
     });
+    for (const t of s.tiles) if (t.owner !== null && t.level > maxLevel) maxLevel = t.level;
+    for (const r of PAIR_COUNT_ROUNDS) {
+      if (r <= ROUND_LIMIT && !pairsRecorded.has(r) && (s.round > r || s.phase === 'gameOver')) {
+        pairsRecorded.add(r);
+        pairsAt[r].push(pairCount(s));
+      }
+    }
 
     // Battle just ended.
     if (prev.phase === 'battle' && s.phase === 'battleOver') {
@@ -206,6 +239,8 @@ for (let g = 0; g < GAMES; g++) {
     if (firstBankruptRound < EARLY_ROUNDS) bankruptBefore5++;
   }
   if (s.bankruptOrder.length > 0) withBankruptcy++;
+  firstPairRounds.push(firstPairRound);
+  maxLevels.push(maxLevel);
   if (s.winner !== null) seatWins[s.winner]++;
   PAIR_SLOTS.forEach((_, k) => {
     const first = firstCompleter[k];
@@ -289,6 +324,20 @@ const catchStats = [
   })()}`,
   `Spent per catch (% of tile price): ${caughtPriceSum ? ((100 * throwSpend) / caughtPriceSum).toFixed(1) : 'n/a'}%   (misses included)`,
   `Balls left unused per player:      ${avg(ballsLeft).toFixed(2)}`,
+  `≥1 pair completed by:              ${PAIR_ROUNDS.filter((r) => r <= ROUND_LIMIT)
+    .map((r) => `R${r} ${p(firstPairRounds.filter((x) => x !== null && x <= r).length)}`)
+    .join('  ')}   (median first pair: ${(() => {
+    const xs = firstPairRounds.filter((x): x is number => x !== null);
+    return xs.length ? `R${medianOf(xs)}` : 'never';
+  })()})`,
+  `Completed pairs held per game:     ${PAIR_COUNT_ROUNDS.filter((r) => r <= ROUND_LIMIT)
+    .map((r) => `R${r} ${avg(pairsAt[r]).toFixed(2)}`)
+    .join('  ')}`,
+  `Highest level reached per game:    avg ${avg(maxLevels).toFixed(2)}`,
+  '',
+  `── Trading ──`,
+  `Trades per game:                   proposed ${(tradesProposed / GAMES).toFixed(2)}  accepted ${((tradesAccepted.swap + tradesAccepted.cash + tradesAccepted.other) / GAMES).toFixed(2)}   (accepted 1-5)`,
+  `Accepted trades:                   pair swaps ${tradesAccepted.swap}  cash buys ${tradesAccepted.cash}  (${tradesCompletingPair} completed a pair)`,
   '',
 ];
 

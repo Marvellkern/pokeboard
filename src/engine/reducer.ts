@@ -5,6 +5,7 @@ import { BALLS, CARD_TEXT, CURRENCY, GRUNTS, NEUTRAL_TYPE, STARTERS, WORDS, type
 import { generateBoard } from './board';
 import { applyMove, makeCombatant } from './battle';
 import { nextFloat, nextInt, seedToState, shuffle } from './rng';
+import { applyTrade, normalizeOffer } from './trade';
 import {
   BOARD_SIZE,
   GO_TILE,
@@ -31,8 +32,9 @@ import {
   tileForm,
   tilePrice,
   tileType,
+  tradeStillValid,
 } from './selectors';
-import type { Action, Battle, BattleKind, Continuation, FighterRef, GameSetup, GameState, PlayerId } from './types';
+import type { Action, Battle, BattleKind, Continuation, FighterRef, GameSetup, GameState, PlayerId, TradeResult, TradeSide } from './types';
 
 const money = (n: number) => `${CURRENCY}${n}`;
 
@@ -85,6 +87,10 @@ export function createGame(setup: GameSetup, seed: number): GameState {
     shopClosed: false,
     shopBuys: 0,
     lastThrow: null,
+    pendingTrade: null,
+    tradeOffers: 0,
+    lastTrade: null,
+    tradeDeclines: [],
   };
   s.deck = shuffle(s, CONFIG.cards.map((_, i) => i));
   log(s, `Game started. Round 1 of ${s.roundLimit}. ${s.players[0].name} goes first.`);
@@ -99,7 +105,8 @@ export function reduce(state: GameState, action: Action): GameState {
   const s = cloneState(state);
   const p = s.players[s.current];
   // Rolling or making the hideout choice closes the shop for the rest of the turn.
-  if ((s.phase === 'roll' || s.phase === 'hideout') && action.type !== 'BUY_BALL' && action.type !== 'LEVEL_UP') {
+  const keepsShopOpen = action.type === 'BUY_BALL' || action.type === 'LEVEL_UP' || action.type === 'PROPOSE_TRADE';
+  if ((s.phase === 'roll' || s.phase === 'hideout') && !keepsShopOpen) {
     s.shopClosed = true;
   }
 
@@ -197,6 +204,19 @@ export function reduce(state: GameState, action: Action): GameState {
     case 'END_TURN':
       advanceTurn(s);
       break;
+
+    case 'PROPOSE_TRADE': {
+      const offer = normalizeOffer(action);
+      s.tradeOffers += 1;
+      s.pendingTrade = { ...offer, from: s.current, returnPhase: s.phase };
+      s.phase = 'trade';
+      log(s, `${p.name} offered ${s.players[offer.to].name} a trade.`);
+      break;
+    }
+
+    case 'RESPOND_TRADE':
+      respondTrade(s, action.accept);
+      break;
   }
   return s;
 }
@@ -222,6 +242,37 @@ function cloneState(s: GameState): GameState {
       lastHit: b.lastHit && { ...b.lastHit },
     },
   };
+}
+
+/** Answers the pending offer and returns to the phase it was made in. */
+function respondTrade(s: GameState, accept: boolean): void {
+  const t = s.pendingTrade!;
+  s.pendingTrade = null;
+  s.phase = t.returnPhase;
+  const from = s.players[t.from];
+  const to = s.players[t.to];
+  let outcome: TradeResult['outcome'];
+  if (!accept) {
+    outcome = 'declined';
+    log(s, `${to.name} declined.`);
+  } else if (!tradeStillValid(s, t)) {
+    outcome = 'cancelled';
+    log(s, `The trade between ${from.name} and ${to.name} was cancelled: the offer no longer adds up.`);
+  } else {
+    outcome = 'accepted';
+    // Names as they arrive (level 1, first form).
+    const side = (x: TradeSide) =>
+      [...x.tiles.map((i) => formAtLevel(s, i, CONFIG.startLevel).name), ...(x.money > 0 ? [money(x.money)] : [])].join(' + ');
+    log(s, `${to.name} accepted: ${from.name} gets ${side(t.receive)}, ${to.name} gets ${side(t.give)}.`);
+    for (const d of applyTrade(s, t)) {
+      log(s, `${s.players[d.owner].name}'s ${tileForm(s, d.tile).name} lost its pair and dropped to Lv ${d.toLevel}.`);
+    }
+  }
+  const { returnPhase: _r, ...offer } = t;
+  const result: TradeResult = { ...offer, seq: (s.lastTrade?.seq ?? 0) + 1, outcome, round: s.round };
+  s.lastTrade = result;
+  const keep = CONFIG.trade.declineMemoryRounds;
+  s.tradeDeclines = [...s.tradeDeclines.filter((d) => s.round - d.round < keep), ...(outcome === 'declined' ? [result] : [])];
 }
 
 function cloneContinuation(c: Continuation): Continuation {
@@ -497,6 +548,7 @@ function advanceTurn(s: GameState): void {
   s.turnSeq += 1;
   s.shopClosed = false;
   s.shopBuys = 0;
+  s.tradeOffers = 0;
   s.pendingTile = null;
   s.pendingCard = null;
   const p = s.players[next];

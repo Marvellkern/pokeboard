@@ -3,7 +3,7 @@
 import { CONFIG } from '../data/config';
 import { CLASSIC_BOARD, NEUTRAL_TYPE, SHOP_BALLS, STARTERS, type BallKind, type Form, type ThrowBall, type TypeId } from '../data/theme';
 import { canProtect, typeMultiplier } from './battle';
-import type { Action, BoardTile, FighterRef, GameState, PlayerId } from './types';
+import type { Action, BoardTile, FighterRef, GameState, PendingTrade, Phase, PlayerId, TradeOffer, TradeSide } from './types';
 
 // The skeleton (corner positions, board length) is fixed for every board; only creature tiles vary.
 export const BOARD_SIZE = CLASSIC_BOARD.length;
@@ -240,6 +240,8 @@ export function actorOf(s: GameState): PlayerId | null {
     }
     case 'debt':
       return s.debt!.debtor;
+    case 'trade':
+      return s.pendingTrade!.to;
     default:
       return s.current;
   }
@@ -295,6 +297,63 @@ export function ballBuyCheck(s: GameState, ball: BallKind): { ok: boolean; reaso
   return { ok: true, reason: null };
 }
 
+// ── Trading ──────────────────────────────────────────────────────────────────
+
+/** Offers can be made on your own turn before rolling (or in the hideout) and before ending it. */
+const TRADE_PHASES = new Set<Phase>(['roll', 'hideout', 'endTurn']);
+
+export type TradeBlock = 'phase' | 'used' | 'noPartner' | 'player' | 'tiles' | 'money' | 'empty';
+
+/** Can the current player make an offer right now (to anyone)? */
+export function canTrade(s: GameState): { ok: boolean; reason: TradeBlock | null } {
+  if (!TRADE_PHASES.has(s.phase)) return { ok: false, reason: 'phase' };
+  if (s.tradeOffers >= CONFIG.trade.offersPerTurn) return { ok: false, reason: 'used' };
+  if (alivePlayers(s).length < 2) return { ok: false, reason: 'noPartner' };
+  return { ok: true, reason: null };
+}
+
+/** Tradeable creatures: every tile creature the player owns, legendaries included (never starters). */
+export function tradeableTiles(s: GameState, pid: PlayerId): number[] {
+  return ownedTiles(s, pid).filter((i) => isProperty(s, i));
+}
+
+function sideProblem(s: GameState, pid: PlayerId, side: TradeSide): TradeBlock | null {
+  // Only creature tiles and money can be traded (no starters, balls or cards): nothing else is accepted.
+  if (!side || !Array.isArray(side.tiles) || typeof side.money !== 'number') return 'tiles';
+  if (Object.keys(side).some((k) => k !== 'tiles' && k !== 'money')) return 'tiles';
+  const tiles = side.tiles;
+  if (new Set(tiles).size !== tiles.length) return 'tiles';
+  for (const i of tiles) {
+    if (!Number.isInteger(i) || i < 0 || i >= s.tiles.length || !isProperty(s, i) || s.tiles[i].owner !== pid) return 'tiles';
+  }
+  if (!Number.isInteger(side.money) || side.money < 0 || side.money > s.players[pid].cash) return 'money';
+  return null;
+}
+
+const OFFER_KEYS = new Set(['type', 'by', 'to', 'give', 'receive']);
+
+const givesSomething =(side: TradeSide) => side.tiles.length > 0 || side.money > 0;
+
+/** Full validation of an offer from the current player. All trade rules live here, not in the UI. */
+export function tradeCheck(s: GameState, offer: TradeOffer): { ok: boolean; reason: TradeBlock | null } {
+  const can = canTrade(s);
+  if (!can.ok) return can;
+  const { to } = offer;
+  if (Object.keys(offer).some((k) => !OFFER_KEYS.has(k))) return { ok: false, reason: 'tiles' };
+  if (!Number.isInteger(to) || to < 0 || to >= s.players.length || to === s.current || s.players[to].bankrupt) {
+    return { ok: false, reason: 'player' };
+  }
+  const problem = sideProblem(s, s.current, offer.give) ?? sideProblem(s, to, offer.receive);
+  if (problem) return { ok: false, reason: problem };
+  if (!givesSomething(offer.give) || !givesSomething(offer.receive)) return { ok: false, reason: 'empty' };
+  return { ok: true, reason: null };
+}
+
+/** Checked again when the offer is accepted: both sides still own the creatures and have the money. */
+export function tradeStillValid(s: GameState, t: PendingTrade): boolean {
+  return sideProblem(s, t.from, t.give) === null && sideProblem(s, t.to, t.receive) === null;
+}
+
 // ── Legal actions ────────────────────────────────────────────────────────────
 
 function levelUps(s: GameState): Action[] {
@@ -346,6 +405,11 @@ export function legalActions(s: GameState): Action[] {
     }
     case 'debt':
       return ownedTiles(s, s.debt!.debtor).map((tile) => ({ type: 'RELEASE', tile }));
+    case 'trade':
+      return [
+        { type: 'RESPOND_TRADE', accept: true },
+        { type: 'RESPOND_TRADE', accept: false },
+      ];
     case 'endTurn':
       return [{ type: 'END_TURN' }, ...levelUps(s)];
     case 'gameOver':
@@ -370,6 +434,8 @@ export function sameAction(a: Action, b: Action): boolean {
 export function isLegal(s: GameState, a: Action): boolean {
   const { by, ...body } = a;
   if (by !== undefined && by !== actorOf(s)) return false;
+  // Offers can't be listed one by one; they are checked directly.
+  if (body.type === 'PROPOSE_TRADE') return tradeCheck(s, body).ok;
   return legalActions(s).some((l) => sameAction(l, body as Action));
 }
 

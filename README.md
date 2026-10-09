@@ -32,6 +32,7 @@ src/
   engine/            pure rules engine: no React, DOM, Math.random, Date or storage
     reducer.ts       createGame(setup, seed), reduce(state, action) → state
     board.ts         generateBoard(rng, 'shuffled' | 'classic'), save migration (withBoard)
+    trade.ts         applying a trade, tradeEffects (what an offer would do)
     battle.ts        battle math (damage, Protect, turn cap)
     selectors.ts     fees, values, legal actions, who acts next
     rng.ts           seeded RNG (its state lives in GameState.rng)
@@ -74,14 +75,14 @@ If the variables are missing, Create room / Join room show "Online play isn't se
 
 ### Develop against the emulator
 
-No Firebase project needed. The emulator needs Java 21+ (for example the Microsoft OpenJDK build).
+No Firebase project needed, and your real database stays untouched. The emulator needs Java 21+ (for example the Microsoft OpenJDK build).
 
 ```bash
-npm run emulators   # auth on :9099, database on :9000, using database.rules.json
-npm run dev
+npm run emulators      # auth on :9099, database on :9000, using database.rules.json
+npm run dev:emulator   # http://localhost:5174, reads .env.emulator.local on top of .env.local
 ```
 
-`.env.local` for the emulator:
+`.env.emulator.local` (git-ignored, like every `*.local` file):
 
 ```
 VITE_FIREBASE_API_KEY=any-non-empty-value
@@ -165,6 +166,43 @@ Every catch is a ball throw. Before rolling (or before the hideout choice), the 
 
 Tuning followed the brief's order. Power 1.3 → 1.5 moved the non-Master share from 22% to 37%. 1.4 is the lowest value that meets 30%+. Raising starting balls to 3 and the carry limit to 4 didn't lower unowned tiles (about 19%). The "≤ 15% unowned" target was already missed at baseline (23%): balls improve it but can't reach it, because bots skip tiles they can't afford.
 
+## Trading
+
+On your own turn, before rolling (also in the hideout) or before ending it, you can make **one offer** to one other player: any of your tile Pokémon (legendaries included) and/or money, for any of theirs and/or money. Each side must give something. Starters, balls and cards can't be traded. The other player accepts or declines; there are no counter-offers. While an offer is pending, nothing else can happen.
+
+- A traded Pokémon **resets to level 1** (and its first form). The money spent on its levels is lost.
+- If a trade **breaks a pair**, the Pokémon its old owner keeps drops to level 2 if it was higher (no refund).
+- If a trade **completes a pair**, the new owner can level both as usual. Legendary fees recount on their own.
+- The offer is checked again when it's accepted. If either side no longer has what was offered, it's cancelled (and still counts as the turn's offer).
+
+**Engine:** `PROPOSE_TRADE` and `RESPOND_TRADE` actions, a `trade` phase whose actor is the recipient, and `GameState.pendingTrade`, `tradeOffers`, `lastTrade` and `tradeDeclines`. Validation is `tradeCheck` in `selectors.ts` (used by `isLegal`). `tradeEffects` in `trade.ts` lists every consequence (level resets, pairs broken or completed, legendary fee changes); the offer screen, the answer screen and the bots all read it. Saves from before trading load with no offer pending.
+
+**Bots** value a tile at its price, × 1.6 if it would complete (or, given away, breaks) their pair; a legendary at ₽200 × (1 + 0.25 × legendaries held). Giving a tile away also counts its lost levels, any partner dropping to level 2, and a danger premium of 0.5 × price if it hands the other player a pair (unless the bot completes one too). They accept when value received ≥ value given × the accept ratio. Before rolling they offer, in order: a **pair swap** (whoever gets the pricier tile adds half the difference in cash), or a **cash buy** at 2 × price if they keep ₽300. They don't repeat a declined offer to the same player for 3 rounds. All of these numbers are in `config.ts` (`trade`, `bot.trade`).
+
+**Pass-and-play:** an offer to another human shows "Pass the device to …" first, then the offer, then "Pass the device back to …". **Online:** the offer appears on the recipient's device with a 30-second countdown (`trade.responseSeconds`); everyone else sees "… offered … a trade" and waits. If the recipient is offline or doesn't answer in time, the device running the bots declines for them.
+
+**Sim (1,000 games, 4 bots, round limit 20, classic / shuffled).** Baseline is the same code with trading switched off.
+
+| Metric | Baseline | Brief start (1.1 / 1.5×) | Step 1: accept 1.0 | **Final: + cash buy 2×** | Target |
+|---|---|---|---|---|---|
+| ≥ 1 pair by round 10 | 48.0 / 51.0% | 64.4 / 68.9% | 72.1 / 76.6% | **94.9 / 95.2%** | ≥ 75%: met |
+| ≥ 1 pair by round 20 | 78.5 / 79.0% | 96.8 / 97.2% | 98.0 / 98.7% | **100 / 100%** | ≥ 95%: met |
+| Accepted trades per game | 0 | 0.83 / 0.84 | 1.34 / 1.32 | **2.41 / 2.40** | 1-5: met |
+| Pair swaps / cash buys (all games) | – | 833 / 0 | 723 / 622 | **299 / 2113** | |
+| Completed pairs held at R10 / R20 | 0.60, 1.26 / 0.68, 1.27 | 1.17, 2.60 / 1.29, 2.61 | 1.37, 2.91 / 1.53, 2.89 | **2.10, 3.27 / 2.14, 3.21** | |
+| Highest level reached (avg) | 3.38 / 3.36 | 4.34 / 4.34 | 4.53 / 4.56 | **4.87 / 4.87** | |
+| Bankruptcy before round 5 | 0 / 0% | 0 / 0% | 0 / 0% | **0 / 0%** | ≤ 5%: met |
+| Win rate by seat (P1 … P4) | 30.6 … 19.0 / 31.1 … 19.4% | 30.3 … 20.1 / 29.8 … 20.5% | 29.3 … 19.7 / 28.6 … 21.5% | **30.0 … 18.1 / 32.9 … 17.3%** | 20-30%: missed |
+| ≥ 1 bankruptcy | 12.0 / 13.7% | 22.8 / 25.7% | 27.0 / 29.8% | **44.8 / 45.8%** | (fee update: ≥ 80%) |
+| Fees beat GO (per lap) from | R20 / R19 | R16 / R13 | – | **R11 / R9** | (fee update: by R8) |
+| Creature tiles unowned at end | 20.2 / 20.5% | 24.8 / 25.8% | – | **32.8 / 33.9%** | (balls update: ≤ 15%) |
+
+Tuning followed the brief's order. At the brief's start values, cash buys were never accepted: a seller values its tile at price + 0.5 × price danger premium, and with the 1.1 margin that's more than 1.5 × price. Lowering the accept ratio to 1.0 lets level-1 tiles sell. Most bot tiles are level 2, valued at 2 × price (price + danger + levels), so cash buys only clear them at 2 ×. Anything between 1.5 × and 2 × changed nothing. Step 3 (danger premium 0.25, instead of 2 ×) kept seats at 28.6-19.6% but left classic round 10 at 73.5%, so the final config is step 2.
+
+**Missed: seat balance.** P4 wins 17-18% and shuffled P1 33%. This was already outside 20-30% at baseline (P1 31%, P4 19%). Early cash buys favor whoever acts first with full cash. Rules weren't changed to chase it, per the brief. **Side effects worth knowing:** bankruptcies almost quadruple and fees overtake GO about 9 rounds earlier, both toward the fee update's targets. Unowned tiles at the end rise from 20% to 33%, because bots spend on pairs instead of catching. That moves the ball update's target the wrong way.
+
+Owner calls: offers per turn (1), the level-1 reset (the softer option is "drops 2 levels"), counter-offers (none), and the bot multipliers.
+
 ## Balance: fee and economy update
 
 Measured with `npm run sim -- 1000 4 20 classic` and `... shuffled` (1,000 games, 4 bots, round limit 20). Each step was applied on its own and measured, cumulative from the row above. Values are classic / shuffled.
@@ -242,4 +280,4 @@ Levers outside this brief's allowed moves (owner's call): faster pair completion
 
 ## Not in the MVP
 
-Trading, auctions, mortgages, doubles, battle XP, status effects, per-Pokémon stats or unique moves, chat, spectators, sound.
+Auctions, mortgages, doubles, counter-offers, battle XP, status effects, per-Pokémon stats or unique moves, chat, spectators, sound.

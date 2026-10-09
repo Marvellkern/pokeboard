@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulator": "vite --mode emulator --port 5174",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",

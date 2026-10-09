@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CONFIG } from '../../data/config';
 import { actorOf } from '../../engine/selectors';
 import type { Action, GameState } from '../../engine/types';
 import { botRunner, isOnline, seatIsBot, seatOf, type Room } from '../../net/room';
@@ -87,6 +88,24 @@ export function OnlineGame({ room, uid }: { room: Room; uid: string }) {
     if (waitingOffline && runsBots && actor !== null && offlineFor >= AUTO_TAKEOVER_MS) void store.takeover(actor, true);
   }, [waitingOffline, runsBots, actor, offlineFor, store]);
 
+  // Trade offers: the recipient has CONFIG.trade.responseSeconds to answer (counted from when this
+  // device saw the offer). The bot-running device declines for them when time runs out, or at once
+  // if they're offline. Bot-controlled recipients answer through the normal bot driver.
+  const tradeKey = shown?.phase === 'trade' ? `${shown.turnSeq}-${shown.logSeq}` : null;
+  const tradeSeen = useRef<{ key: string; at: number } | null>(null);
+  if (tradeKey && tradeSeen.current?.key !== tradeKey) tradeSeen.current = { key: tradeKey, at: Date.now() };
+  const tradeDeadline = tradeKey ? tradeSeen.current!.at + CONFIG.trade.responseSeconds * 1000 : undefined;
+  const autoDeclined = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tradeKey || !runsBots || !shown?.pendingTrade || autoDeclined.current === tradeKey) return;
+    const to = shown.pendingTrade.to;
+    const seat = room.seats[to];
+    if (!seat || seat.kind !== 'human' || seatIsBot(room, to)) return;
+    if (isOnline(room, seat.playerId) && now < tradeDeadline!) return;
+    autoDeclined.current = tradeKey;
+    store.botAct(shown, { type: 'RESPOND_TRADE', accept: false });
+  }, [tradeKey, runsBots, shown, room, now, tradeDeadline, store]);
+
   // Whoever sees the game end first marks the room finished.
   useEffect(() => {
     if (shown?.phase === 'gameOver' && room.meta.status === 'playing') void store.markFinished();
@@ -147,6 +166,7 @@ export function OnlineGame({ room, uid }: { room: Room; uid: string }) {
     playAgain: isHost ? { label: 'Play again', onClick: () => void store.rematch() } : null,
     playAgainNote: isHost ? undefined : 'Waiting for the host to start another game…',
     onBusyChange,
+    tradeDeadline,
   };
   return <GameScreen key={`${room.code}-${shown.seed}`} session={session} />;
 }

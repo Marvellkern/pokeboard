@@ -130,6 +130,16 @@ export const CONFIG = {
     maxFailedTurns: 3,
   },
 
+  // ── Trading ──
+  trade: {
+    /** Offers a player may make per turn (accepted or not). */
+    offersPerTurn: 1,
+    /** Online: an offer nobody answers in this many seconds (or whose recipient is offline) is declined. */
+    responseSeconds: 30,
+    /** A declined offer is remembered this many rounds; bots don't repeat it to the same player meanwhile. */
+    declineMemoryRounds: 3,
+  },
+
   // ── Debt ──
   /** Releasing a creature refunds this share of everything invested (price + levels). Was 0.5. */
   liquidationRatio: 0.4,
@@ -181,6 +191,24 @@ export const CONFIG = {
       neutral: { [-4]: 0, [-3]: 0, [-2]: 0, [-1]: 0, 0: 0.02, 1: 0.6, 2: 1, 3: 1, 4: 1 },
       disadvantage: { [-4]: 0, [-3]: 0, [-2]: 0, [-1]: 0, 0: 0, 1: 0.02, 2: 0.5, 3: 0.9, 4: 1 },
     } as Record<'advantage' | 'neutral' | 'disadvantage', Record<number, number>>,
+    /** Trading (bots value tiles at their price, adjusted as below; money at face value). */
+    trade: {
+      /** A tile that would complete (or, given away, breaks) the bot's own pair is worth price × this. */
+      pairMultiplier: 1.6,
+      /** A legendary is worth legendary price × (1 + this × legendaries held afterwards). */
+      legendaryStep: 0.25,
+      /** Giving away a tile that completes the other player's pair costs an extra price × this (unless the bot completes one too). */
+      dangerPremium: 0.5,
+      /** Accept when value received ≥ value given × this. Brief start 1.1; sim-tuned to 1.0 (range 1.0-1.25). */
+      acceptRatio: 1.0,
+      /**
+       * Cash-buy offers pay tile price × this... Brief start 1.5; sim-tuned to 2 (range 1.5-2). A seller values a
+       * Lv 2 tile at price + danger premium + levels = 2× price, so below 2 only Lv 1 tiles ever sell.
+       */
+      cashBuyMultiplier: 2,
+      /** ...and only if the bot keeps at least this much cash. */
+      cashBuyReserve: 300,
+    },
   },
 
   // ── Misc ──

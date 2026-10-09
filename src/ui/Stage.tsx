@@ -5,6 +5,7 @@ import { bestFighter } from '../engine/bot';
 import {
   actorOf,
   canManage,
+  canTrade,
   challengeCosts,
   challengeOpponent,
   gruntLevel,
@@ -23,6 +24,7 @@ import { Outlined } from './common';
 import { chanceText, money } from './format';
 import { BallIcon } from './icons';
 import { battleAllBots, type Viewer } from './viewer';
+import { TradeSummaryCard } from './modals/TradeModals';
 
 export interface StageAction {
   key: string;
@@ -55,6 +57,8 @@ export interface StageHandlers {
   openLiquidate: () => void;
   skipBanner: () => void;
   openShop: () => void;
+  openTrade: () => void;
+  openTradeAnswer: () => void;
 }
 
 /** Hint from engine selectors: the current player's best fighter, if it has a type edge. */
@@ -88,6 +92,12 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
     actorIsHuman && shopOpen(game) ? [{ key: 'shop', label: 'Shop', icon: <BallIcon ball="poke" size={22} />, onClick: h.openShop }] : [];
   const manage: StageAction[] =
     actorIsHuman && canManage(game) ? [{ key: 'manage', label: 'Manage team', onClick: h.openManage }] : [];
+  // Trade: shown when the engine allows an offer; after the one offer it stays, disabled, with the reason.
+  const tc = canTrade(game);
+  const trade: StageAction[] =
+    actorIsHuman && (tc.ok || tc.reason === 'used')
+      ? [{ key: 'trade', label: tc.ok ? 'Trade' : 'One offer per turn', disabled: !tc.ok, onClick: h.openTrade }]
+      : [];
 
   if (busy) {
     return { headline: 'On the move!', sub: 'Tap to skip', actions: [] };
@@ -103,7 +113,7 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
       return {
         headline: curIsMe ? 'Your turn!' : `${cur.name}'s turn`,
         sub: sub(cur.inHideout ? undefined : 'Roll the dice to move.'),
-        actions: only([{ key: 'roll', label: 'Roll', variant: 'primary', onClick: () => h.act({ type: 'ROLL' }) }, ...shop, ...manage]),
+        actions: only([{ key: 'roll', label: 'Roll', variant: 'primary', onClick: () => h.act({ type: 'ROLL' }) }, ...shop, ...manage, ...trade]),
       };
 
     case 'buy': {
@@ -197,6 +207,7 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
             : []),
           ...shop,
           ...manage,
+          ...trade,
         ]),
       };
 
@@ -222,6 +233,18 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
       return { headline: 'Battle!', sub: 'Battle in progress…', actions: [] };
     }
 
+    case 'trade': {
+      const t = game.pendingTrade!;
+      const from = game.players[t.from];
+      const to = game.players[t.to];
+      return {
+        headline: actorIsHuman ? `${from.name} offers you a trade!` : `${viewer.isMe(t.from) ? 'You' : from.name} offered ${to.name} a trade`,
+        sub: sub(),
+        detail: (fixed) => <TradeSummaryCard game={game} fixed={fixed} />,
+        actions: only([{ key: 'review', label: 'See the offer', variant: 'primary', onClick: h.openTradeAnswer }]),
+      };
+    }
+
     case 'debt': {
       const d = game.debt!;
       const debtor = game.players[d.debtor];
@@ -241,6 +264,7 @@ export function buildStage(game: GameState, busy: boolean, h: StageHandlers, vie
     case 'endTurn': {
       const actions = only([
         ...manage,
+        ...trade,
         { key: 'end', label: 'End turn', variant: 'primary', onClick: () => h.act({ type: 'END_TURN' }) },
       ]);
       const pos = cur.position;

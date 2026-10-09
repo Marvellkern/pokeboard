@@ -6,11 +6,13 @@ import {
   BOARD_SIZE,
   actorOf,
   canManage,
+  canTrade,
+  tileForm,
   shopOpen,
   netWorth,
   ownedTiles,
 } from '../engine/selectors';
-import type { GameState, PlayerId } from '../engine/types';
+import type { GameState, PlayerId, TradeResult, TradeSide } from '../engine/types';
 import type { Session } from './session';
 import { ViewerContext, battleAllBots } from './viewer';
 import { BattleOverlay } from './BattleOverlay';
@@ -22,6 +24,7 @@ import { FullLogModal, GameOverModal, LiquidateModal, ManageTeamModal } from './
 import { TileInfoModal } from './modals/TileModals';
 import { TypeChartModal } from './modals/TypeChartModal';
 import { ShopModal } from './modals/ShopModal';
+import { TradeAnswerModal, TradeBuilderModal } from './modals/TradeModals';
 import { PropertyCard } from './cards';
 import { BallIcon } from './icons';
 import { ThrowMedia, throwHeadline, useThrowAnimation } from './Throw';
@@ -158,8 +161,16 @@ export function GameScreen({ session }: { session: Session }) {
   const [shopUi, setShopUi] = useState(false);
   const [tileInfo, setTileInfo] = useState<number | null>(null);
   const [liquidateHidden, setLiquidateHidden] = useState(false);
-  const [bannerFor, setBannerFor] = useState<number | null>(null);
+  const [tradeOpen, setTradeOpen] = useState(false);
+  const [answerHidden, setAnswerHidden] = useState(false);
+  /** Full-screen hand-over step (pass-and-play): whose hands the device goes to next, and why. */
+  const [banner, setBanner] = useState<Banner | null>(null);
+  const bannerFor = banner?.pid ?? null;
   const lastBannerTurn = useRef<number>(-1);
+  const lastTradeBanner = useRef<number>(-1);
+  /** Result of the latest answered offer, shown briefly. */
+  const [tradeNote, setTradeNote] = useState<TradeResult | null>(null);
+  const lastTradeSeq = useRef(game.lastTrade?.seq ?? 0);
 
   const humans = game.players.filter((p) => viewer.isMe(p.id) && !p.bankrupt).length;
   const actor = actorOf(game);
@@ -170,14 +181,44 @@ export function GameScreen({ session }: { session: Session }) {
     if (!session.passAndPlay || game.phase === 'gameOver') return;
     if (lastBannerTurn.current === game.turnSeq) return;
     lastBannerTurn.current = game.turnSeq;
-    if (viewer.isMe(game.current) && humans > 1) setBannerFor(game.current);
-  }, [game.turnSeq, game.current, game.phase, humans, session.passAndPlay, viewer]);
+    if (viewer.isMe(game.current) && humans > 1) setBanner(turnBanner(game, game.current));
+  }, [game.turnSeq, game.current, game.phase, humans, session.passAndPlay, viewer, game]);
+
+  // Pass-and-play trades: hand the device to the recipient for the offer, then back to the proposer.
+  const pending = game.phase === 'trade' ? game.pendingTrade : null;
+  useEffect(() => {
+    if (!session.passAndPlay || !pending || humans < 2 || !viewer.isMe(pending.to)) return;
+    if (lastTradeBanner.current === game.logSeq) return;
+    lastTradeBanner.current = game.logSeq;
+    const to = game.players[pending.to];
+    setBanner({ pid: pending.to, title: `Trade offer for ${to.name}`, note: `Pass the device to ${to.name}, then tap to see the offer.` });
+  }, [pending, humans, session.passAndPlay, viewer, game.logSeq, game.players]);
+
+  useEffect(() => {
+    if (!tradeNote) return;
+    const timer = window.setTimeout(() => setTradeNote(null), 3500);
+    return () => clearTimeout(timer);
+  }, [tradeNote]);
+
+  // An offer was answered: show the result, and in pass-and-play hand the device back.
+  useEffect(() => {
+    const t = game.lastTrade;
+    if (!t || t.seq === lastTradeSeq.current) return;
+    lastTradeSeq.current = t.seq;
+    setTradeNote(t);
+    if (session.passAndPlay && humans > 1 && viewer.isMe(t.from) && viewer.isMe(t.to) && game.phase !== 'gameOver') {
+      const back = game.players[t.from];
+      setBanner({ pid: t.from, title: `Back to ${back.name}`, note: `Pass the device back to ${back.name}, then tap to continue.` });
+    }
+  }, [game.lastTrade, game.phase, game.players, humans, session.passAndPlay, viewer]);
 
   // Close phase-bound modals when the phase moves on.
   useEffect(() => {
     if (!CHOICE_PHASES.has(game.phase)) setPickerOpen(false);
     if (game.phase !== 'debt') setLiquidateHidden(false);
-  }, [game.phase]);
+    if (game.phase !== 'trade') setAnswerHidden(false);
+    if (!canTrade(game).ok) setTradeOpen(false);
+  }, [game.phase, game]);
 
   // Bot driver: only on the device that plays the bot seats.
   const { runsBots, botAct, resolveBotBattle } = session;
@@ -219,6 +260,8 @@ export function GameScreen({ session }: { session: Session }) {
       openPicker: () => setPickerOpen(true),
       openLiquidate: () => setLiquidateHidden(false),
       skipBanner: () => runsBots && botAct({ type: 'ACK' }),
+      openTrade: () => setTradeOpen(true),
+      openTradeAnswer: () => setAnswerHidden(false),
     },
     viewer,
   );
@@ -308,6 +351,22 @@ export function GameScreen({ session }: { session: Session }) {
         {chartOpen && <TypeChartModal onClose={() => setChartOpen(false)} />}
         {shopUi && showHumanUi && shopOpen(game) && <ShopModal game={game} onAction={act} onClose={() => setShopUi(false)} />}
         {tileInfo !== null && <TileInfoModal game={game} tile={tileInfo} onClose={() => setTileInfo(null)} />}
+        {tradeOpen && showHumanUi && canTrade(game).ok && (
+          <TradeBuilderModal key={game.turnSeq} game={game} onAction={act} onClose={() => setTradeOpen(false)} />
+        )}
+        {showHumanUi && game.phase === 'trade' && !answerHidden && (
+          <TradeAnswerModal game={game} onAction={act} onClose={() => setAnswerHidden(true)} deadline={session.tradeDeadline} />
+        )}
+        {tradeNote && !busy && (
+          <button
+            className="card-strong pop fixed top-3 left-1/2 z-[55] max-w-[92vw] -translate-x-1/2 px-5 py-3 text-center"
+            role="status"
+            onClick={() => setTradeNote(null)}
+          >
+            <span className="font-display block text-[20px] font-bold">{tradeHeadline(game, tradeNote, viewer.isMe)}</span>
+            {tradeNote.outcome === 'accepted' && <span className="block text-[14px] font-bold">{tradeDetail(game, tradeNote)}</span>}
+          </button>
+        )}
 
         {humanBattle && !busy && (
           <BattleOverlay
@@ -322,9 +381,7 @@ export function GameScreen({ session }: { session: Session }) {
           <GameOverModal game={game} playAgain={session.playAgain} note={session.playAgainNote} />
         )}
 
-        {bannerFor !== null && game.phase !== 'gameOver' && (
-          <TurnBanner game={game} pid={bannerFor} onDismiss={() => setBannerFor(null)} />
-        )}
+        {banner !== null && game.phase !== 'gameOver' && <TurnBanner game={game} banner={banner} onDismiss={() => setBanner(null)} />}
 
         {session.syncProblem && (
           <div className="pill fixed top-3 left-1/2 z-[80] -translate-x-1/2" role="status">
@@ -446,8 +503,33 @@ function JustHappened({ game }: { game: GameState }) {
   );
 }
 
-function TurnBanner({ game, pid, onDismiss }: { game: GameState; pid: number; onDismiss: () => void }) {
-  const p = game.players[pid];
+interface Banner {
+  pid: PlayerId;
+  title: string;
+  note: string;
+}
+
+const turnBanner = (game: GameState, pid: PlayerId): Banner => ({
+  pid,
+  title: `${game.players[pid].name}'s turn`,
+  note: `Pass the device to ${game.players[pid].name}, then tap to continue.`,
+});
+
+function tradeHeadline(game: GameState, t: TradeResult, isMe: (pid: PlayerId) => boolean): string {
+  const to = game.players[t.to].name;
+  if (t.outcome === 'accepted') return 'Trade accepted!';
+  if (t.outcome === 'cancelled') return 'Trade cancelled';
+  return isMe(t.to) && !isMe(t.from) ? 'You declined' : `${to} declined`;
+}
+
+/** "Rina gets Charmander, Bot 2 gets Squirtle + ₽60" (creatures are level 1 after a trade). */
+function tradeDetail(game: GameState, t: TradeResult): string {
+  const side = (x: TradeSide) => [...x.tiles.map((i) => tileForm(game, i).name), ...(x.money > 0 ? [money(x.money)] : [])].join(' + ');
+  return `${game.players[t.from].name} gets ${side(t.receive)}, ${game.players[t.to].name} gets ${side(t.give)}`;
+}
+
+function TurnBanner({ game, banner, onDismiss }: { game: GameState; banner: Banner; onDismiss: () => void }) {
+  const p = game.players[banner.pid];
   const f = STARTERS[p.starter];
   const color = playerColor(p);
   const fg = textOn(color);
@@ -460,9 +542,9 @@ function TurnBanner({ game, pid, onDismiss }: { game: GameState; pid: number; on
     >
       <Avatar player={p} dex={f.dex} name={f.name} size={140} ring={8} />
       <Outlined className="pop text-center text-[44px] sm:text-[64px]" inverse={fg !== '#FFFFFF'}>
-        {p.name}'s turn
+        {banner.title}
       </Outlined>
-      <span className="text-[17px] font-extrabold">Pass the device to {p.name}, then tap to continue.</span>
+      <span className="text-[17px] font-extrabold">{banner.note}</span>
     </button>
   );
 }
